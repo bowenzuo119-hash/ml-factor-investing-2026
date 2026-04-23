@@ -205,3 +205,11 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Data files - never commit raw data, only commit the download scripts
+# Keep data/README.md and .gitkeep so folder structure is preserved
+data/*.parquet
+data/*.csv
+data/*.feather
+data/*.h5
+data/*.pkl
