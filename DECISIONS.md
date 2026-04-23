@@ -56,6 +56,18 @@ Every time you make a non-trivial "choose A over B" decision, add a new entry us
 
 **Revisit if:** Never.
 
+### 2026-04-23 — Pin pandas to <3.0
+
+**Context:** Fresh `pip install -r requirements.txt` on macOS arm64 resolved pandas to 3.0.2. `import pandas_datareader` then failed with `TypeError: deprecate_kwarg() missing 1 required positional argument: 'new_arg_name'` — pandas_datareader 0.10.0 has not been updated for pandas 3.0's API changes.
+
+**Options considered:** Leave pandas unpinned and wait for pandas_datareader to catch up — simplest, but blocks clean installs today with no upstream fix ETA. Drop pandas_datareader and hit FRED directly via requests — removes the dependency, but adds a custom code path to maintain. Pin `pandas<3` in requirements.txt — one-line fix, keeps the existing data-loading path working, and pandas 2.x is the line the rest of the stack (scikit-learn, xgboost, shap) is built against.
+
+**Decision:** Pin `pandas<3` in requirements.txt.
+
+**Reasoning:** The incompatibility lives entirely inside pandas_datareader; forcing ourselves off it is bigger than the problem. Nothing we use depends on a pandas-3.0-only feature.
+
+**Revisit if:** pandas_datareader ships a pandas-3.x-compatible release, or we replace it with a different data source.
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
