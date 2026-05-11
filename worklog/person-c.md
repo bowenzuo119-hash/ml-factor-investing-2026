@@ -1,6 +1,6 @@
-# Person C — Nicolas
+# Person C — Andrea Fontana
 
-Role: regime detection (Gaussian Mixture) + leverage overlay (@nicolascoutomota-boop)
+Role: ML models + factor signals (@agfontana)
 
 Newest entries at the top.
 
