@@ -7,7 +7,7 @@ Role: data + backtest infrastructure (@bowenzuo119-hash)
 ## 2026-05-11
 
 **Done:**
-- Re-invited Person C (@nicolascoutomota-boop) as collaborator after the original invite expired.
+- Re-invited Person B (@nicolascoutomota-boop) as collaborator after the original invite expired.
 - Created branch `persona-data-pipeline` and opened PR #1 (merged into main).
 - Wrote `src/data_loader.py` skeleton: `load_prices`, `load_macro`, `load_sp500_membership` signatures + numpy-style docstrings (bodies raise NotImplementedError). Flagged survivorship-bias risk in comments.
 - Wrote `src/backtest.py` skeleton: `run_walk_forward_backtest` signature, `CrossSectionalModel` Protocol (the fit/predict interface B will implement), `LeverageFn` type alias (the function C will return), `BacktestResult` frozen dataclass, and `INTERFACE_VERSION = "0.1.0"`.
