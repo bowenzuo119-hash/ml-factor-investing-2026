@@ -33,10 +33,10 @@ DECISIONS.md        # Running log of every non-trivial design choice.
 | Person | Workstream | Owns |
 |--------|------------|------|
 | A (bowenzuo119-hash) | Data & infrastructure | `data_loader.py`, `backtest.py`, `metrics.py`, CI |
-| B | Alpha model | `factors.py`, `models.py` |
-| C | Risk & regime | `regime.py` and the macro side of `data_loader` |
+| B | Risk & regime | `regime.py` and the macro side of `data_loader` |
+| C | Alpha model | `factors.py`, `models.py` |
 
-Branch convention: `persona-data-pipeline`, `personb-models`, `personc-regime`. Never push to `main` directly; open a PR and get at least one reviewer.
+Branch convention: `persona-data-pipeline` (A), `personb-regime` or current `personc-regime` (Nicolas), `personc-models` (Andrea). Never push to `main` directly; open a PR and get at least one reviewer.
 
 ## Setup
 
