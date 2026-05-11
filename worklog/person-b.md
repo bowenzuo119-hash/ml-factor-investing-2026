@@ -1,6 +1,6 @@
-# Person B — A. Fontana
+# Person B — Nicolas
 
-Role: ML models + factor signals (@agfontana)
+Role: regime detection (Gaussian Mixture) + leverage overlay (@nicolascoutomota-boop)
 
 Newest entries at the top.
 
