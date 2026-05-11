@@ -99,3 +99,18 @@ Every time you make a non-trivial "choose A over B" decision, add a new entry us
 Placeholders to fill in as they happen:
 
 data source(s) and universe definition (which stocks, regions, date range); feature set and factor definitions; train / validation / test split scheme (walk-forward or expanding window); target definition (returns horizon, winsorization, normalization); model family choice (linear baseline, tree ensemble, NN) and reason for baseline-first; hyperparameter search strategy and budget; evaluation metrics (IC, Sharpe, turnover, drawdown) and which one is primary; transaction cost assumptions.
+
+
+---
+
+## 2026-05-11 — Process: always require teammate review before merging
+
+**Context:** PR #1 (data_loader + backtest skeletons, README, DECISIONS entries) was opened, but Person A merged it without waiting for an Approve from Person B or Person C. After merging, Person A also hit GitHub's "Revert" button, which only created branch `revert-1-persona-data-pipeline` without opening a revert PR — so `main` was unaffected, but the orphan branch had to be cleaned up.
+
+**Decision:** From PR #2 onwards, every PR into `main` must have at least one approving review from a teammate (not the author) before merging. PR #1 was content-safe (docstrings and signatures only), so no retroactive remediation is needed, but the rule is now hard.
+
+**Why it matters:** Once we start landing real factor-computation, model-training, and backtest-engine code, a single unreviewed merge into `main` can silently poison everyone's results. Cheaper to catch in PR than to debug across three branches later.
+
+**Operational notes:**
+- GitHub blocks PR authors from self-approving, so the natural workflow already nudges us correctly — we just have to wait for the green check.
+- The "Revert" button on a merged PR does **not** instantly undo the merge. It creates a new branch with a reverse commit and asks you to open a fresh PR to merge that revert into `main`. If you only complete steps 1–2 and stop, nothing rolls back. Don't panic-click it.
