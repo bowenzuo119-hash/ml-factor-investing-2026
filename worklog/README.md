@@ -43,5 +43,5 @@ So each of us can:
 | File | Owner | GitHub |
 |------|-------|--------|
 | person-a.md | Bowen | @bowenzuo119-hash |
-| person-b.md | A. Fontana | @agfontana |
-| person-c.md | Nicolas | @nicolascoutomota-boop |
+| person-b.md | Nicolas | @nicolascoutomota-boop |
+| person-c.md | Andrea Fontana | @agfontana |
