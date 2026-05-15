@@ -1,0 +1,36 @@
+REGIME DETECTION — WRITTEN SUMMARY (Person C, Week 2)
+======================================================
+To be included in the report's methodology section.
+
+We employed two families of unsupervised models to classify each
+month from January 2005 to December 2024 into distinct market
+regimes: Gaussian Mixture Models (GMM) with K=2 and K=3 components,
+and Hidden Markov Models (HMM) with n=2 and n=3 states.
+
+Six macro-financial features, all lagged one trading day to prevent
+look-ahead bias, were used as inputs: realised volatility at 21-day
+and 63-day horizons, the VIX index, the 10Y-2Y Treasury yield spread,
+the BAA-AAA corporate credit spread, and the trailing 3-month S&P 500
+return. All features were standardised to zero mean and unit variance
+before model fitting.
+
+The selected model is HMM n=2, chosen on the basis of
+crisis-period detection rate across seven known market stress episodes
+(GFC 2007–09, Euro crisis, China scare 2015–16, Q4 2018 selloff,
+COVID crash 2020, and the 2022 inflation regime). This model correctly
+classified 93% of known stress months as
+"crisis."
+
+Across the full 2005–2024 sample, the model assigns:
+  Calm regime  : 63% of months
+  
+  Crisis regime: 37% of months
+
+The HMM adds time-dependence absent from the GMM — regimes are
+"sticky," transitioning with a learned probability matrix — which
+better reflects the persistence of market stress periods in practice.
+GMM-HMM agreement on K=2 labels was 70%, with
+disagreements concentrated at regime transition points.
+
+Regime labels are saved in 'C:\Users\andre\ml-factor-investing-2026\results\regime_labels_final.csv' (column: regime_final)
+for use in the Week 4 leverage overlay.
