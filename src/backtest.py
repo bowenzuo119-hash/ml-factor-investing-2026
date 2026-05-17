@@ -272,9 +272,14 @@ def run_walk_forward_backtest(
     #   - train on features[t-train_window : t-1] with labels = returns[t-train_window+1 : t]
     #   - predict scores at t
     #   - form L/S portfolio
-    #   - realise return = sum(weights * returns[t+1])
+    #   - charge transaction cost on L1 turnover vs the previous rebalance
+    #   - realise net next-period return
     weights_records: list[tuple[pd.Timestamp, pd.Series]] = []
-    monthly_returns: list[tuple[pd.Timestamp, float]] = []
+    gross_returns_list: list[tuple[pd.Timestamp, float]] = []
+    net_returns_list: list[tuple[pd.Timestamp, float]] = []
+    turnover_records: list[tuple[pd.Timestamp, float]] = []
+    prev_weights: pd.Series = pd.Series(dtype=float)  # empty at t=0
+    cost_rate = transaction_cost_bps / 10_000.0  # bps -> fraction
 
     for i in range(train_window, len(rebal_dates) - 1):
         rebal_t = rebal_dates[i]
@@ -341,20 +346,39 @@ def run_walk_forward_backtest(
             weights.loc[shorts] = -1.0 / len(shorts)
         weights_records.append((rebal_t, weights))
 
-        # 2d. Realise next-period return = w . r_{t+1}
+        # 2d. Charge transaction cost on L1 turnover vs the previous rebalance.
+        # First rebalance: prev_weights is empty, so turnover = sum(|w|) -- this
+        # is the cost of entering positions from cash.
+        union = weights.index.union(prev_weights.index)
+        w_now = weights.reindex(union, fill_value=0.0)
+        w_prev = prev_weights.reindex(union, fill_value=0.0)
+        turnover_t = float((w_now - w_prev).abs().sum())
+        cost_t = cost_rate * turnover_t
+        turnover_records.append((rebal_t, turnover_t))
+
+        # 2e. Realise next-period return.
+        # gross = w . r_{t+1}; net = gross - cost (cost charged in the same period
+        # as the rebalance, i.e. attributed to the return earned over [t, t+1]).
         next_period_rets = returns.loc[next_t, weights.index]
-        port_return = float((weights * next_period_rets).sum(skipna=True))
-        monthly_returns.append((next_t, port_return))
+        gross_t = float((weights * next_period_rets).sum(skipna=True))
+        net_t = gross_t - cost_t
+        gross_returns_list.append((next_t, gross_t))
+        net_returns_list.append((next_t, net_t))
+
+        prev_weights = weights  # carry into next iteration
 
     # --- 3. Assemble BacktestResult ---
-    if not monthly_returns:
+    if not net_returns_list:
         raise RuntimeError(
             "No rebalance produced a portfolio. Check input alignment and "
             "that train_window leaves at least one prediction date."
         )
 
-    port_ret_series = pd.Series(
-        {d: r for d, r in monthly_returns}, name="portfolio_return"
+    portfolio_returns = pd.Series(
+        dict(net_returns_list), name="portfolio_return"
+    ).sort_index()
+    gross_returns = pd.Series(
+        dict(gross_returns_list), name="gross_return"
     ).sort_index()
 
     # Wide weights DataFrame: rows = rebalance dates, cols = union of all assets
@@ -365,13 +389,15 @@ def run_walk_forward_backtest(
     for d, w in weights_records:
         weights_df.loc[d, w.index] = w.values
 
-    # Turnover and leverage are placeholders until commits 3 and 4
-    turnover = pd.Series(0.0, index=weights_df.index, name="turnover")
-    leverage = pd.Series(1.0, index=weights_df.index, name="leverage")
+    turnover_series = pd.Series(
+        dict(turnover_records), name="turnover"
+    ).sort_index()
+    # Leverage stays a placeholder until commit 3 (regime overlay)
+    leverage_series = pd.Series(1.0, index=weights_df.index, name="leverage")
 
     metadata = {
         "interface_version": INTERFACE_VERSION,
-        "n_rebalances": len(monthly_returns),
+        "n_rebalances": len(net_returns_list),
         "first_rebalance": rebal_dates_used[0],
         "last_rebalance": rebal_dates_used[-1],
         "train_window": train_window,
@@ -380,17 +406,19 @@ def run_walk_forward_backtest(
         "short_quantile": short_quantile,
         "rebalance": rebalance,
         "transaction_cost_bps": transaction_cost_bps,
-        "transaction_costs_applied": False,  # TODO commit 3
-        "regime_fn_applied": False,  # TODO commit 4
+        "transaction_costs_applied": True,
+        "total_cost_drag_pct": (gross_returns.sum() - portfolio_returns.sum()) * 100,
+        "avg_monthly_turnover": float(turnover_series.mean()),
+        "regime_fn_applied": False,  # TODO commit 3
         "random_state": random_state,
     }
 
     return BacktestResult(
-        portfolio_returns=port_ret_series,
-        gross_returns=port_ret_series,  # same as net until costs land in commit 3
+        portfolio_returns=portfolio_returns,
+        gross_returns=gross_returns,
         weights=weights_df,
-        turnover=turnover,
-        leverage=leverage,
+        turnover=turnover_series,
+        leverage=leverage_series,
         metadata=metadata,
     )
 
@@ -461,25 +489,35 @@ if __name__ == "__main__":
         test_window=12,
         long_quantile=0.9,
         short_quantile=0.1,
+        transaction_cost_bps=10.0,  # 10 bps round-trip, sane S&P500 baseline
     )
 
     print(f"BacktestResult:")
     print(f"  portfolio_returns: {len(result.portfolio_returns)} months")
     print(f"  weights:           {result.weights.shape}")
-    print(f"  metadata.n_rebalances: {result.metadata['n_rebalances']}")
+    print(f"  metadata.n_rebalances:           {result.metadata['n_rebalances']}")
+    print(f"  metadata.transaction_costs_applied: {result.metadata['transaction_costs_applied']}")
+    print(f"  metadata.avg_monthly_turnover:   {result.metadata['avg_monthly_turnover']:.3f}")
+    print(f"  metadata.total_cost_drag_pct:    {result.metadata['total_cost_drag_pct']:.3f}%")
     print()
 
     # Sanity check #1: Sharpe must be ~0 for random predictions
-    monthly_mean = result.portfolio_returns.mean()
-    monthly_std = result.portfolio_returns.std(ddof=1)
-    annualised_sharpe = (monthly_mean / monthly_std) * np.sqrt(12) if monthly_std > 0 else 0.0
-    print(f"Random-prediction sanity check:")
-    print(f"  Mean monthly return:  {monthly_mean * 100:+.3f}%")
-    print(f"  Monthly volatility:   {monthly_std * 100:.3f}%")
-    print(f"  Annualised Sharpe:    {annualised_sharpe:+.3f}  (must be ~0)")
+    def _sharpe(r: pd.Series) -> float:
+        s = r.std(ddof=1)
+        return float((r.mean() / s) * np.sqrt(12)) if s > 0 else 0.0
 
-    if abs(annualised_sharpe) > 1.0:
-        print(f"\n  WARNING: |Sharpe| > 1.0 with random predictions.")
+    gross_sharpe = _sharpe(result.gross_returns)
+    net_sharpe = _sharpe(result.portfolio_returns)
+
+    print(f"Random-prediction sanity check (transaction_cost_bps=10):")
+    print(f"  Mean monthly gross return:  {result.gross_returns.mean() * 100:+.3f}%")
+    print(f"  Mean monthly net return:    {result.portfolio_returns.mean() * 100:+.3f}%")
+    print(f"  Cost drag per month:        {(result.gross_returns.mean() - result.portfolio_returns.mean()) * 100:.3f}%")
+    print(f"  Annualised GROSS Sharpe:    {gross_sharpe:+.3f}  (must be ~0)")
+    print(f"  Annualised NET   Sharpe:    {net_sharpe:+.3f}  (slightly more negative than gross due to costs)")
+
+    if abs(gross_sharpe) > 1.0:
+        print(f"\n  WARNING: |gross Sharpe| > 1.0 with random predictions.")
         print(f"  This suggests look-ahead bias in the engine.")
     else:
-        print(f"\n  OK: |Sharpe| <= 1.0, no obvious look-ahead bug.")
+        print(f"\n  OK: |gross Sharpe| <= 1.0, no obvious look-ahead bug.")
