@@ -94,6 +94,21 @@ Every time you make a non-trivial "choose A over B" decision, add a new entry us
 **Revisit if:** We need to support intraday rebalancing (we don't), or the leverage overlay needs to see more than a date (e.g. portfolio state) - in which case widen `LeverageFn` rather than redesigning.
 
 
+## 2026-05-13 - Point-in-time S&P 500 membership source: fja05680/sp500
+
+**Context:** The 2026-05-11 entry decided "Universe = S&P 500 with point-in-time membership" but left the actual data source open ("source TBD - Wikipedia history is the leading candidate"). Need to lock this down before `load_prices` can know which tickers to pull.
+
+**Options considered:** (a) **github.com/fja05680/sp500** - a maintained CSV that records every (ticker, start_date, end_date) membership spell back to 1996. Includes delisted tickers (LEHMQ, AABA, TWTR, etc.) with post-bankruptcy SEC suffixes. 27 KB, plain CSV, no auth, no rate limit. (b) Wikipedia "List of S&P 500 companies" - scrape the "Selected changes" table and reconstruct membership by walking revisions. Authoritative but requires custom parsing and the revisions only go back ~10 years cleanly. (c) CRSP via WRDS - the academic gold standard, but onboarding takes days (already rejected on 2026-05-11 for the same reason).
+
+**Decision:** Option (a). `download_sp500_universe()` fetches `sp500_ticker_start_end.csv` and `sp500.csv` from fja05680/sp500 into `data/raw/`. `load_sp500_membership(asof)` reads the membership CSV and returns sorted tickers whose spell straddles `asof`.
+
+**Reasoning:** Smallest possible thing that works. Verified against 5 famous events (Lehman in Sept 2008, Tesla joining Dec 2020, Twitter going private Oct 2022, etc.) — all consistent with this dataset. Wikipedia would have been a multi-day side quest.
+
+**Gotcha to remember:** fja05680/sp500 uses **post-bankruptcy SEC tickers** (e.g. `LEHMQ` not `LEH`, `WAMUQ` not `WM`). yfinance generally indexes by the *trading* ticker, so the price loader will need a small mapping/fallback layer for the dozen-or-so bankruptcy cases. Track as TODO when implementing `load_prices`.
+
+**Revisit if:** fja05680/sp500 stops being maintained (last commit was recent as of 2026-05), or we find a ticker that's clearly wrong on a date we care about.
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
