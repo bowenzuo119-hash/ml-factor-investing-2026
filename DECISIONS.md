@@ -109,6 +109,32 @@ Every time you make a non-trivial "choose A over B" decision, add a new entry us
 **Revisit if:** fja05680/sp500 stops being maintained (last commit was recent as of 2026-05), or we find a ticker that's clearly wrong on a date we care about.
 
 
+## 2026-05-13 — Adopt Project Framework Complete (May 2026) as the master design doc
+
+**Context:** Several reference documents now exist (kickoff plan, Person A data pipeline checklist, Fama-French takeaways, Gu-Kelly-Xiu paper, stock-prediction RF guide, sample-splitting report) plus a new comprehensive "Project Framework Complete" PDF. With multiple sources of truth, it is unclear which takes precedence when they conflict.
+
+**Options considered:** (a) Treat each document as advisory and resolve conflicts case by case — flexible but creates ambiguity about what "the plan" actually is. (b) Designate the Project Framework Complete as the master spec, with all other documents as supporting/explanatory material — single source of truth for design questions; the price is that deviating from the framework now requires a DECISIONS.md entry. (c) Re-author a single new master doc by merging all references — high effort, duplicates the framework which is already comprehensive.
+
+**Decision:** Option (b). Project Framework Complete (May 2026) is the master spec. The other PDFs are reference / pedagogy / methodological background. Any deviation from the framework gets logged here.
+
+**Reasoning:** The framework is the most concrete and recent document, and it cites/incorporates the others. Aligns with the user's explicit instruction "我们以后主要按照那个 pdf 说的来吧". Keeps the rule simple: when in doubt, check the framework.
+
+**Revisit if:** A new comprehensive design document supersedes it, or the framework develops gaps we cannot resolve by extension.
+
+
+## 2026-05-13 — Widen regime overlay interface: `LeverageFn` → `RegimeFn` returning `RegimeParams`
+
+**Context:** The 2026-05-11 entry defined `LeverageFn = Callable[[pd.Timestamp], float]` as the contract between Person C's regime overlay and Person A's backtest engine. The newly-ratified Project Framework (see entry above) §5.3 specifies that the regime overlay must communicate **three** risk knobs to the backtest: gross leverage, breadth (number of stocks per sector leg), and entry threshold (quantile cutoff). A scalar return type cannot encode the latter two.
+
+**Options considered:** (a) Keep `Callable[..., float]` and silently drop breadth/threshold from the framework — fastest path, but the framework's risk-management story (half the project's contribution) becomes inexpressible in code. (b) Add two more parallel callables (`LeverageFn`, `BreadthFn`, `ThresholdFn`) — keeps each contract scalar-simple but explodes the `run_walk_forward_backtest` signature and forces Person C to expose three separate entry points. (c) Widen the contract to `Callable[..., RegimeParams]` where `RegimeParams` is a `TypedDict(total=False)` with optional keys `{leverage, long_quantile, short_quantile, k_per_sector}`. The regime overlay populates only the keys it actively controls; the backtest fills missing keys from its static defaults or neutral fallbacks.
+
+**Decision:** Option (c). [src/backtest.py](src/backtest.py) now defines `RegimeParams` (TypedDict) and `RegimeFn = Callable[[pd.Timestamp], RegimeParams]`. The `run_walk_forward_backtest` signature replaces `leverage_fn: LeverageFn | None` with `regime_fn: RegimeFn | None`. `INTERFACE_VERSION` bumped from `0.1.0` to `0.2.0` with a changelog block at the bottom of the file.
+
+**Reasoning:** Smallest schema change that accommodates the framework's three-knob model. `TypedDict(total=False)` gives type-checker support without forcing the regime to specify keys it does not care about — a leverage-only regime just returns `{"leverage": 0.7}`, identical-ish ergonomics to the old `LeverageFn`. No production code depended on the v0.1.0 contract yet (only signature stubs), so this is a clean break with zero migration cost.
+
+**Revisit if:** The framework adds a fourth knob (extend `RegimeParams`), or we discover the regime needs to see portfolio state to make its call (in which case widen to `Callable[[pd.Timestamp, PortfolioState], RegimeParams]`).
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
