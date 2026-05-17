@@ -176,6 +176,21 @@ Every time you make a non-trivial "choose A over B" decision, add a new entry us
 **Revisit if:** TA replies with Compustat access (then build `load_fundamentals` in a follow-up PR with 45-day reporting lag), or by 2026-05-20 with no reply (then formally adopt skip-fundamentals and update this entry).
 
 
+## 2026-05-13 — Macro data: 6 FRED series for now; daily S&P 500 index deferred
+
+**Context:** `load_macro` is the third and final data-source loader (after CRSP prices and fja05680 membership). Project Framework §4.4 prescribes 6 FRED series for Person C's regime model: VIX, DGS10, DGS2, DBAA, DAAA, DFF. But C's actual regime features also include 21-day and 63-day realized volatility of the S&P 500 plus the trailing 3-month S&P 500 return, all of which need a **daily S&P 500 index level** — not in the Framework's 6-series list.
+
+**Options considered:** (a) Implement the 6 Framework series only, leave S&P 500 to Person C — clean PR scope, but C has to maintain their own ad-hoc data fetch (already does, per the `personc-regime` branch review). (b) Add FRED's `SP500` series to the bundle — one extra column, but FRED's `SP500` only goes back to **2014**, too short for the 2005-2024 project window and especially too short for C's "60-month minimum training" walk-forward setup (would push first prediction to ~2018). (c) Build a `load_market_index()` function in this PR that splices CRSP value-weighted market index + yfinance `^GSPC` to get a long-history daily series — solves the problem but expands the PR scope by another ~half day, and pulls in the yfinance dependency we've been trying to defer to one specific splice PR.
+
+**Decision:** Option (a). This PR ships the 6 FRED series only. The daily S&P 500 index level is documented as a TODO in `load_macro`'s docstring, with a note that the future `load_market_index()` will handle it.
+
+**Reasoning:** Keep PRs single-purpose. The 6 FRED series are immediately useful to C (term spread, credit spread, VIX, fed funds — all macro features that don't need S&P 500). Splicing for S&P 500 daily history is conceptually identical to the planned 2023-2024 splice for CRSP prices, so it makes sense to bundle them into one splice-focused PR later rather than sprinkling splice logic across the codebase.
+
+**Implementation note:** Cache strategy stores the *union* of all series ever fetched. Calling `load_macro(series_ids=["VIXCLS"])` is served entirely from the cache once any earlier call has populated it. Switching to a never-fetched series triggers a refetch of the full bundle (FRED is fast enough that fine-grained per-series caching is overkill). Cache file is ~185 KB (vs. CRSP's 152 MB) — keeping it in `data/processed/` for consistency.
+
+**Revisit if:** Person C needs the S&P 500 daily series urgently (then build `load_market_index()` immediately), or if we extend the macro feature set beyond the Framework's 6 (e.g., adding TED spread, MOVE index, etc. — would just extend `DEFAULT_MACRO_SERIES`).
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:

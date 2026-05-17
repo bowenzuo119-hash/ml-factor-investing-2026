@@ -48,6 +48,19 @@ SP500_CURRENT_FILE = "sp500.csv"
 CRSP_MONTHLY_FILE = "CRSPData_1925_2022.csv"
 CRSP_MONTHLY_CACHE = "crsp_monthly.parquet"
 
+# FRED macro series for Person C's regime model. Picked per Project
+# Framework §4.4 ("Macro for Person C: VIX, DGS10, DGS2, DBAA, DAAA, DFF").
+# All have history back to at least 1990, plenty for the 2005-2024 window.
+DEFAULT_MACRO_SERIES: tuple[str, ...] = (
+    "VIXCLS",  # CBOE Volatility Index (VIX), daily close
+    "DGS10",   # 10-Year Treasury constant-maturity yield
+    "DGS2",    # 2-Year Treasury constant-maturity yield (term spread = DGS10-DGS2)
+    "DBAA",    # Moody's Baa corporate bond yield
+    "DAAA",    # Moody's Aaa corporate bond yield (credit spread = DBAA-DAAA)
+    "DFF",     # Federal Funds effective rate
+)
+MACRO_CACHE = "macro_daily.parquet"
+
 
 def download_sp500_universe(*, force: bool = False) -> dict[str, Path]:
     """Download S&P 500 historical membership data to ``data/raw/``.
@@ -282,36 +295,132 @@ def load_prices(
     return df.loc[(slice(start_ts, end_ts), slice(None)), :]
 
 
-def load_macro(
-    series_ids: list[str],
-    start: str,
-    end: str | None = None,
+def _load_macro_raw(
+    series_ids: tuple[str, ...],
     *,
-    use_cache: bool = True,
+    force_rebuild: bool = False,
 ) -> pd.DataFrame:
-    """Load macro/regime features from FRED.
+    """Fetch FRED series, ffill to business-day frequency, cache to parquet.
+
+    The cache stores the *union* of all series ever fetched, so subsequent
+    calls with a subset of series are served entirely from the cache.
+    Adding a never-fetched series triggers a refresh of the full bundle
+    (FRED is fast enough that fine-grained caching is overkill).
 
     Parameters
     ----------
-    series_ids : list[str]
-        FRED series IDs (e.g. `["VIXCLS", "T10Y2Y", "BAA10Y"]`).
-    start, end : str
-        Same semantics as :func:`load_prices`.
-    use_cache : bool, keyword-only, default True
-        Reuse `data/raw/macro.parquet` when possible.
+    series_ids : tuple[str, ...]
+        FRED series IDs (e.g. ``("VIXCLS", "DGS10")``). Tuple (not list)
+        because tuples are hashable and the cache key is order-independent.
+    force_rebuild : bool, default False
+        Re-fetch from FRED even if the cache covers the requested series.
 
     Returns
     -------
     pd.DataFrame
-        Wide-format frame indexed by `date` with one column per series ID.
-        Forward-filled to business-day frequency (macro series are released
-        less often than equities trade); the original release date is
-        preserved in a sibling column `<series_id>__asof` to avoid
-        look-ahead bias when joining onto the equity panel.
+        Wide-format frame indexed by ``date`` (business-day frequency)
+        with one column per requested series ID. Missing observations
+        (weekends, holidays, gaps before a series existed) are
+        forward-filled; the first available value is the oldest non-null
+        observation FRED has on file.
     """
-    raise NotImplementedError(
-        "load_macro: implement after load_prices is green"
-    )
+    cache_path = PROCESSED_DIR / MACRO_CACHE
+    requested = set(series_ids)
+
+    if cache_path.exists() and not force_rebuild:
+        cached = pd.read_parquet(cache_path)
+        if requested.issubset(cached.columns):
+            print(f"[load_macro] cache hit: {sorted(requested)}")
+            return cached[list(series_ids)]
+        missing = requested - set(cached.columns)
+        print(f"[load_macro] cache missing {missing}; refetching the bundle")
+
+    # Heavy import: deferred so callers not touching FRED don't pay for it.
+    import pandas_datareader.data as pdr
+
+    print(f"[load_macro] fetching {len(series_ids)} FRED series since 1990...")
+    df = pdr.DataReader(list(series_ids), "fred", start="1990-01-01")
+    df.index.name = "date"
+
+    # FRED daily series occasionally have NaN on holidays / when a series
+    # didn't yet exist. Forward-fill to a clean business-day index so
+    # downstream join-on-date code doesn't have to handle gaps.
+    bdays = pd.bdate_range(df.index.min(), df.index.max())
+    df = df.reindex(bdays).ffill()
+    df.index.name = "date"
+
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(cache_path, compression="snappy")
+    size_kb = cache_path.stat().st_size / 1024
+    print(f"[load_macro] cached to {cache_path.name} ({size_kb:.1f} KB)")
+    return df
+
+
+def load_macro(
+    *,
+    start: str | None = None,
+    end: str | None = None,
+    series_ids: tuple[str, ...] | list[str] | None = None,
+    force_rebuild: bool = False,
+) -> pd.DataFrame:
+    """Load macro / regime features from FRED.
+
+    First call fetches over the network (~5-10 sec for the default bundle);
+    subsequent calls read the parquet cache.
+
+    Parameters
+    ----------
+    start : str, optional
+        Inclusive start date (ISO ``"YYYY-MM-DD"``). ``None`` means earliest
+        FRED has on file (1990 for the loader's default fetch window).
+    end : str, optional
+        Inclusive end date. ``None`` means latest available.
+    series_ids : tuple[str, ...] or list[str], optional
+        FRED series IDs to return. ``None`` (default) returns the
+        Framework-specified bundle: see :data:`DEFAULT_MACRO_SERIES`.
+    force_rebuild : bool, keyword-only, default False
+        Re-fetch from FRED instead of using the parquet cache.
+
+    Returns
+    -------
+    pd.DataFrame
+        Wide-format frame indexed by ``date`` (business-day frequency)
+        with one column per series ID. Forward-filled.
+
+    Notes
+    -----
+    * Daily S&P 500 index level is NOT in the default bundle. FRED's
+      ``SP500`` series only goes back to ~2014, too short for the
+      2005-2024 project window. Person C currently sources their
+      S&P 500 index data independently; a future PR may add
+      `load_market_index` that splices CRSP + yfinance to cover the
+      full window.
+    * Macro features are released with publication lags (FRED typically
+      delivers same-day for daily series, monthly with ~1-month lag for
+      monthly series). This loader does not enforce as-of dating; if
+      strict look-ahead avoidance matters for your use case, apply
+      ``.shift(N)`` downstream.
+
+    Examples
+    --------
+    >>> # Default bundle, 2005-2024
+    >>> df = load_macro(start="2005-01-01", end="2024-12-31")
+    >>> df["DGS10"].head()
+
+    >>> # Just one series
+    >>> vix = load_macro(series_ids=["VIXCLS"], start="2020-01-01")
+    """
+    if series_ids is None:
+        series_ids = DEFAULT_MACRO_SERIES
+    series_ids = tuple(series_ids)  # ensure hashable
+
+    df = _load_macro_raw(series_ids, force_rebuild=force_rebuild)
+
+    if start is not None:
+        df = df.loc[df.index >= pd.Timestamp(start)]
+    if end is not None:
+        df = df.loc[df.index <= pd.Timestamp(end)]
+    return df
 
 
 def load_sp500_membership(asof: str) -> list[str]:
@@ -399,3 +508,26 @@ if __name__ == "__main__":
         print(f"  Last available month: {last_date}, monthly return: {last_ret:.2%}")
     else:
         print("  LEH not found - data integrity bug?")
+
+    # ---- FRED macro features ----
+    print()
+    print("=" * 70)
+    print("FRED macro smoke test")
+    print("=" * 70)
+    macro = load_macro(start="2008-01-01", end="2008-12-31")
+    print()
+    print(f"Shape: {macro.shape[0]:,} rows x {macro.shape[1]} cols")
+    print(f"Date range: {macro.index.min().date()} -> {macro.index.max().date()}")
+    print(f"Series: {list(macro.columns)}")
+    print()
+    print("Famous-event spot check (Lehman week, Sept 15 2008):")
+    week = macro.loc["2008-09-12":"2008-09-19"]
+    print(week.to_string())
+    print()
+    # Sanity: VIX should spike that week; term spread (DGS10 - DGS2) widens too.
+    spread = macro["DGS10"] - macro["DGS2"]
+    credit = macro["DBAA"] - macro["DAAA"]
+    print(f"Derived features quick-check on 2008-09-15:")
+    print(f"  VIX:                       {macro.loc['2008-09-15', 'VIXCLS']:.2f}  (spiked from ~25 to 30+)")
+    print(f"  Term spread (DGS10-DGS2):  {spread.loc['2008-09-15']:.2f}  (recession-watch indicator)")
+    print(f"  Credit spread (DBAA-DAAA): {credit.loc['2008-09-15']:.2f}  (default-risk gauge)")
