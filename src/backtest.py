@@ -278,6 +278,8 @@ def run_walk_forward_backtest(
     gross_returns_list: list[tuple[pd.Timestamp, float]] = []
     net_returns_list: list[tuple[pd.Timestamp, float]] = []
     turnover_records: list[tuple[pd.Timestamp, float]] = []
+    leverage_records: list[tuple[pd.Timestamp, float]] = []
+    k_per_sector_warned = False  # warn at most once per backtest
     prev_weights: pd.Series = pd.Series(dtype=float)  # empty at t=0
     cost_rate = transaction_cost_bps / 10_000.0  # bps -> fraction
 
@@ -332,10 +334,35 @@ def run_walk_forward_backtest(
         if isinstance(scores.index, pd.MultiIndex):
             scores = scores.reset_index(level=0, drop=True)
 
-        # 2c. Build long-short portfolio: equal-weight within each leg,
-        # dollar-neutral (long sum = short sum = 1.0 in absolute value).
-        long_cut = scores.quantile(long_quantile)
-        short_cut = scores.quantile(short_quantile)
+        # 2c. Consult the regime overlay (if provided) for this rebalance's
+        # risk parameters. Missing keys fall back to the static defaults
+        # passed to this function (or to leverage=1.0, no k_per_sector).
+        if regime_fn is not None:
+            regime_params: RegimeParams = regime_fn(rebal_t) or {}
+        else:
+            regime_params = {}
+
+        long_q = regime_params.get("long_quantile", long_quantile)
+        short_q = regime_params.get("short_quantile", short_quantile)
+        leverage_t = float(regime_params.get("leverage", 1.0))
+
+        if "k_per_sector" in regime_params and not k_per_sector_warned:
+            import warnings
+            warnings.warn(
+                "regime_fn returned 'k_per_sector' but sector-neutral "
+                "construction is not yet implemented in this backtest "
+                "(staged for a follow-up commit). Falling back to global "
+                "quantile-based selection. This warning fires at most once.",
+                UserWarning,
+                stacklevel=2,
+            )
+            k_per_sector_warned = True
+
+        # 2d. Build long-short portfolio: equal-weight within each leg,
+        # dollar-neutral before leverage (|long sum| = |short sum| = 1.0),
+        # then scaled by the regime's leverage multiplier.
+        long_cut = scores.quantile(long_q)
+        short_cut = scores.quantile(short_q)
         longs = scores[scores >= long_cut].index
         shorts = scores[scores <= short_cut].index
 
@@ -344,7 +371,9 @@ def run_walk_forward_backtest(
             weights.loc[longs] = 1.0 / len(longs)
         if len(shorts) > 0:
             weights.loc[shorts] = -1.0 / len(shorts)
+        weights = weights * leverage_t  # regime-scaled exposure
         weights_records.append((rebal_t, weights))
+        leverage_records.append((rebal_t, leverage_t))
 
         # 2d. Charge transaction cost on L1 turnover vs the previous rebalance.
         # First rebalance: prev_weights is empty, so turnover = sum(|w|) -- this
@@ -392,8 +421,9 @@ def run_walk_forward_backtest(
     turnover_series = pd.Series(
         dict(turnover_records), name="turnover"
     ).sort_index()
-    # Leverage stays a placeholder until commit 3 (regime overlay)
-    leverage_series = pd.Series(1.0, index=weights_df.index, name="leverage")
+    leverage_series = pd.Series(
+        dict(leverage_records), name="leverage"
+    ).sort_index()
 
     metadata = {
         "interface_version": INTERFACE_VERSION,
@@ -409,7 +439,9 @@ def run_walk_forward_backtest(
         "transaction_costs_applied": True,
         "total_cost_drag_pct": (gross_returns.sum() - portfolio_returns.sum()) * 100,
         "avg_monthly_turnover": float(turnover_series.mean()),
-        "regime_fn_applied": False,  # TODO commit 3
+        "regime_fn_applied": regime_fn is not None,
+        "avg_leverage": float(leverage_series.mean()),
+        "leverage_range": (float(leverage_series.min()), float(leverage_series.max())),
         "random_state": random_state,
     }
 
@@ -481,7 +513,12 @@ if __name__ == "__main__":
     print(f"Returns shape: {rets_wide.shape}, features shape: {feats.shape}")
     print()
 
-    result = run_walk_forward_backtest(
+    def _sharpe(r: pd.Series) -> float:
+        s = r.std(ddof=1)
+        return float((r.mean() / s) * np.sqrt(12)) if s > 0 else 0.0
+
+    # --- Run A: baseline, no regime overlay (constant 1.0x leverage) ---
+    res_baseline = run_walk_forward_backtest(
         returns=rets_wide,
         features=feats,
         model=RandomModel(random_state=42),
@@ -489,35 +526,73 @@ if __name__ == "__main__":
         test_window=12,
         long_quantile=0.9,
         short_quantile=0.1,
-        transaction_cost_bps=10.0,  # 10 bps round-trip, sane S&P500 baseline
+        transaction_cost_bps=10.0,
     )
 
-    print(f"BacktestResult:")
-    print(f"  portfolio_returns: {len(result.portfolio_returns)} months")
-    print(f"  weights:           {result.weights.shape}")
-    print(f"  metadata.n_rebalances:           {result.metadata['n_rebalances']}")
-    print(f"  metadata.transaction_costs_applied: {result.metadata['transaction_costs_applied']}")
-    print(f"  metadata.avg_monthly_turnover:   {result.metadata['avg_monthly_turnover']:.3f}")
-    print(f"  metadata.total_cost_drag_pct:    {result.metadata['total_cost_drag_pct']:.3f}%")
+    # --- Run B: with regime_fn that cycles through 3 regimes ---
+    # First third of test = calm (1.0x), middle = moderate (0.7x), last = turbulent (0.4x).
+    def cycling_regime(ts: pd.Timestamp) -> RegimeParams:
+        # Use month rank from the start of the test window
+        month_idx = (ts.year - 2015) * 12 + ts.month
+        if month_idx < 35:
+            return {"leverage": 1.0}
+        elif month_idx < 55:
+            return {"leverage": 0.7}
+        else:
+            return {"leverage": 0.4}
+
+    res_regime = run_walk_forward_backtest(
+        returns=rets_wide,
+        features=feats,
+        model=RandomModel(random_state=42),
+        train_window=12,
+        test_window=12,
+        long_quantile=0.9,
+        short_quantile=0.1,
+        transaction_cost_bps=10.0,
+        regime_fn=cycling_regime,
+    )
+
+    print(f"{'':30s}  {'Baseline':>12s}  {'+ Regime':>12s}")
+    print(f"{'-' * 60}")
+    for label, key, fmt in [
+        ("n_rebalances",          "n_rebalances",          "{:>12d}"),
+        ("avg_monthly_turnover",  "avg_monthly_turnover",  "{:>12.3f}"),
+        ("avg_leverage",          "avg_leverage",          "{:>12.3f}"),
+        ("regime_fn_applied",     "regime_fn_applied",     "{:>12}"),
+    ]:
+        v1 = res_baseline.metadata[key]
+        v2 = res_regime.metadata[key]
+        print(f"  {label:28s}  {fmt.format(v1):>12s}  {fmt.format(v2):>12s}")
+    print(f"  {'leverage_range':28s}  "
+          f"{str(res_baseline.metadata['leverage_range']):>12s}  "
+          f"{str(res_regime.metadata['leverage_range']):>12s}")
+
     print()
+    print(f"{'':30s}  {'Baseline':>12s}  {'+ Regime':>12s}")
+    print(f"{'-' * 60}")
+    print(f"  {'Mean monthly net %':28s}  "
+          f"{res_baseline.portfolio_returns.mean() * 100:>+12.3f}  "
+          f"{res_regime.portfolio_returns.mean() * 100:>+12.3f}")
+    print(f"  {'Net annualised Sharpe':28s}  "
+          f"{_sharpe(res_baseline.portfolio_returns):>+12.3f}  "
+          f"{_sharpe(res_regime.portfolio_returns):>+12.3f}")
+    print(f"  {'Net return std %':28s}  "
+          f"{res_baseline.portfolio_returns.std(ddof=1) * 100:>12.3f}  "
+          f"{res_regime.portfolio_returns.std(ddof=1) * 100:>12.3f}")
 
-    # Sanity check #1: Sharpe must be ~0 for random predictions
-    def _sharpe(r: pd.Series) -> float:
-        s = r.std(ddof=1)
-        return float((r.mean() / s) * np.sqrt(12)) if s > 0 else 0.0
-
-    gross_sharpe = _sharpe(result.gross_returns)
-    net_sharpe = _sharpe(result.portfolio_returns)
-
-    print(f"Random-prediction sanity check (transaction_cost_bps=10):")
-    print(f"  Mean monthly gross return:  {result.gross_returns.mean() * 100:+.3f}%")
-    print(f"  Mean monthly net return:    {result.portfolio_returns.mean() * 100:+.3f}%")
-    print(f"  Cost drag per month:        {(result.gross_returns.mean() - result.portfolio_returns.mean()) * 100:.3f}%")
-    print(f"  Annualised GROSS Sharpe:    {gross_sharpe:+.3f}  (must be ~0)")
-    print(f"  Annualised NET   Sharpe:    {net_sharpe:+.3f}  (slightly more negative than gross due to costs)")
-
+    gross_sharpe = _sharpe(res_baseline.gross_returns)
+    print()
+    print(f"Sanity gate (baseline gross Sharpe): {gross_sharpe:+.3f}", end="  ")
     if abs(gross_sharpe) > 1.0:
-        print(f"\n  WARNING: |gross Sharpe| > 1.0 with random predictions.")
-        print(f"  This suggests look-ahead bias in the engine.")
+        print("FAIL: |Sharpe| > 1.0 with random predictions -- look-ahead bug?")
     else:
-        print(f"\n  OK: |gross Sharpe| <= 1.0, no obvious look-ahead bug.")
+        print("PASS: |Sharpe| <= 1.0 with random predictions")
+
+    print()
+    print("Regime overlay sanity:")
+    print(f"  avg_leverage went from {res_baseline.metadata['avg_leverage']:.3f} "
+          f"(baseline) to {res_regime.metadata['avg_leverage']:.3f} (regime)")
+    print(f"  Net vol shrank from {res_baseline.portfolio_returns.std(ddof=1)*100:.3f}% "
+          f"to {res_regime.portfolio_returns.std(ddof=1)*100:.3f}% "
+          "(regime caps leverage <= 1.0, so vol must <=)")
