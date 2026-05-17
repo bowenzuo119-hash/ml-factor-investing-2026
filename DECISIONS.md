@@ -135,6 +135,47 @@ Every time you make a non-trivial "choose A over B" decision, add a new entry us
 **Revisit if:** The framework adds a fourth knob (extend `RegimeParams`), or we discover the regime needs to see portfolio state to make its call (in which case widen to `Callable[[pd.Timestamp, PortfolioState], RegimeParams]`).
 
 
+## 2026-05-13 — Switch primary price source: yfinance → CRSP MSF
+
+**Context:** The 2026-05-11 entry chose yfinance for daily adjusted-close prices on cost / accessibility grounds. A course TA then shared a CRSP Monthly Stock File (MSF) covering 1925-12 → 2022-12 (471 MB CSV, ~37k unique PERMNOs, all US listed common stocks). CRSP is the academic gold standard, and the Project Framework (now the master spec) implicitly assumes CRSP-level data quality. The yfinance plan would have left us with several known footguns (LEHMQ-vs-LEH ticker mismatches, missing delisting returns, currently-listed-only universe, rate limits).
+
+**Options considered:** (a) Stick with yfinance — easiest, no new code, but inherits all the survivorship and quality issues we just paid to identify. (b) CRSP MSF as primary, no fallback — best data quality, but CRSP file ends 2022-12 so the Project Framework's 2019-2024 test window can only be evaluated 2019-2022. (c) CRSP MSF primary + yfinance splice for 2023-2024 — full test window preserved, but yfinance for 2023-2024 silently re-introduces survivorship bias for any S&P 500 stock delisted in that window (e.g., ATVI, SPLK, SIVB, FRC, SBNY).
+
+**Decision:** Option (c). Primary source is now CRSP MSF, loaded via `_load_crsp_monthly_raw` and exposed through the rewritten `load_prices`. The yfinance splice for 2023-2024 is planned but not yet implemented; see the next entry.
+
+**Reasoning:** CRSP solves the bias problems we worked hardest to identify (point-in-time universe, proper delisting handling for LEH and AABA, stable PERMNO identifier, accurate adjustment for splits/dividends). The fja05680 membership table still stays in the pipeline as the S&P 500 universe filter — CRSP has all US stocks, not an index-membership flag. The yfinance "rescue" of 2023-2024 is the smallest acceptable departure from the Framework's 2019-2024 test window.
+
+**Implementation note:** `load_prices` now returns a `(date, permno)` MultiIndex frame (PERMNO is the stable CRSP identifier; TICKER changes when companies restructure). Bid-ask midpoint convention (negative PRC), alpha-coded RET values (`B`, `C`), and SHROUT-in-thousands are all handled inside `_load_crsp_monthly_raw`. Parsed result cached to `data/processed/crsp_monthly.parquet` (~152 MB). Adds `pyarrow` to requirements.txt for parquet I/O.
+
+**Revisit if:** The TA shares an updated CRSP extending past 2022-12 (kills the need for the yfinance splice), or we get access to CRSP-Compustat Merged (would let us add fundamentals too — see next-next entry).
+
+
+## 2026-05-13 — Yfinance splice for 2023-2024 (planned, not yet implemented)
+
+**Context:** CRSP MSF ends 2022-12. The Project Framework's test window is 2019-2024. To preserve the full window we need to splice yfinance data for the 2023-2024 tail.
+
+**Options considered:** (a) Shrink the test window to 2019-2022 — clean data, but only 3 years of OOS evaluation and misses the 2023 banking-crisis regime (a perfect natural experiment for the regime overlay). (b) Splice CRSP (2005-2022) + yfinance (2023-2024) with explicit safeguards: overlap-month price sanity check (Dec 2022), manual patch list for stocks delisted from S&P 500 in 2023-2024 (ATVI, SPLK, SIVB, FRC, SBNY at minimum), and dual reporting of `Sharpe(2019-2022)` vs `Sharpe(2019-2024)` so any "improvement" from the spliced years that looks like a survivorship boost is visible. (c) Wait for the TA to send an updated CRSP — unknown timeline, blocks Person B and C.
+
+**Decision:** Option (b) at the design level, but implementation is **deferred to a follow-up PR**. The current PR ships only the CRSP loader; calls with `end > 2022-12-30` will simply return what CRSP has and the caller has to know not to read past that. The splice + safeguards will land alongside Person B's first model run, when the test-window dates actually start mattering.
+
+**Reasoning:** Don't pre-build the splice machinery before we know the model side is ready to consume it. The CRSP-only loader is the dependency-of-everything; ship that first and unblock Person B / C.
+
+**Revisit if:** Person B starts the first end-to-end backtest and we hit "CRSP ends 2022-12-30" as a real blocker (then implement the splice immediately).
+
+
+## 2026-05-13 — Defer fundamentals (B/M, E/P, D/P) pending Compustat access check
+
+**Context:** Project Framework §4.4 and the Fama-French Takeaways both list firm-level fundamentals (book equity, earnings, dividends) in Person A's responsibilities, with the rationale that B/M, E/P, D/P are the canonical Fama-French value factors. CRSP MSF has none of these — that's Compustat. User (Person A) has emailed the course TA to ask whether the same channel that produced the CRSP file can also produce Compustat.
+
+**Options considered:** (a) Skip fundamentals permanently and rely on price-based factors only — supported by GKX (2020) Figures 4-5 which place price/liquidity/volatility features in the top ~10 predictors and fundamentals at rank 50+. Saves ~3-5 days of Person A work and avoids the 45-day reporting lag enforcement, ticker→GVKEY mapping, and quarterly-to-monthly ffill machinery. (b) Wait for the TA reply and pursue Compustat if available — best factor coverage (B/M, E/P, D/P plus the broader 94-feature set GKX uses), defensible in the report ("we replicated the full Fama-French feature stack"), but blocks on a response that may take days and may be negative. (c) Use yfinance fundamentals as a fallback — bad quality (only last 4 quarters, no delisted firms, occasional wrong numbers) and re-introduces survivorship bias.
+
+**Decision:** **Defer** the binary skip/include decision. Person A proceeds with the CRSP-only price loader (this PR) and the price-based feature pipeline; Person B is asked to chase the Compustat data request rather than blocking Person A's work on it. If Compustat lands, we add a separate `load_fundamentals` later in a follow-up PR. If the TA says no, we formally adopt option (a) and explicitly note in the final report that we used only price-based features.
+
+**Reasoning:** Person B wants fundamentals (his words: "even 20% importance is still important"), which is a defensible position — the Fama-French value factors do add marginal signal even if they're not the top predictors. But the data-acquisition risk shouldn't block Person A's downstream work; pipelining the request alongside the price loader keeps the project's critical path unblocked.
+
+**Revisit if:** TA replies with Compustat access (then build `load_fundamentals` in a follow-up PR with 45-day reporting lag), or by 2026-05-20 with no reply (then formally adopt skip-fundamentals and update this entry).
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:

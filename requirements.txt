@@ -1,5 +1,6 @@
 pandas<3
 numpy
+pyarrow  # parquet I/O for data_loader cache
 scikit-learn
 xgboost
 torch
