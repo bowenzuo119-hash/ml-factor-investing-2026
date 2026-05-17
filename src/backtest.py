@@ -5,9 +5,10 @@ This module is the **integration point** between three workstreams:
     Person A (this file): provides `run_walk_forward_backtest`.
     Person B           : provides a `fit` / `predict` model object that
                           produces cross-sectional return forecasts.
-    Person C           : provides a `leverage_fn` that maps a date to a
-                          gross-leverage multiplier in [0, 1] based on the
-                          regime detected on that date.
+    Person C           : provides a `regime_fn` that maps a date to a
+                          `RegimeParams` dict (leverage, breadth, entry
+                          quantiles) based on the regime detected on that
+                          date. See `RegimeParams` below for the schema.
 
 If the interface in this file changes, B and C need to know - bump the
 `INTERFACE_VERSION` constant at the bottom and shout in standup.
@@ -21,7 +22,7 @@ turnover at `transaction_cost_bps` basis points per dollar traded.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Protocol
+from typing import Callable, Protocol, TypedDict
 
 import pandas as pd
 
@@ -47,8 +48,53 @@ class CrossSectionalModel(Protocol):
         ...
 
 
-# Type alias for C's regime overlay.
-LeverageFn = Callable[[pd.Timestamp], float]
+class RegimeParams(TypedDict, total=False):
+    """Per-rebalance risk parameters returned by Person C's regime overlay.
+
+    All keys are optional (``total=False``). Any key the regime overlay does
+    not set falls back to the static defaults passed to
+    :func:`run_walk_forward_backtest` (``long_quantile``, ``short_quantile``)
+    or to neutral values (``leverage=1.0``, no ``k_per_sector`` override).
+    A regime that only wants to dial leverage just returns
+    ``{"leverage": 0.7}``; a regime that also wants to tighten breadth
+    returns ``{"leverage": 0.4, "k_per_sector": 2}``.
+
+    Standard keys
+    -------------
+    leverage : float
+        Gross leverage multiplier in [0, +inf). 1.0 = full notional,
+        0.5 = half-size positions, 0.0 = flat. Applied to both legs of
+        the long-short portfolio before transaction costs.
+    long_quantile : float
+        Cross-sectional quantile cutoff in (0, 1) for the long leg.
+        Stocks ranked above this percentile within their sector are bought.
+    short_quantile : float
+        Cross-sectional quantile cutoff in (0, 1) for the short leg.
+        Stocks ranked below this percentile within their sector are sold short.
+    k_per_sector : int
+        Optional alternative to quantile-based selection: hold exactly
+        ``k`` long (and ``k`` short) stocks per GICS sector. If present,
+        overrides ``long_quantile`` / ``short_quantile`` for that rebalance.
+
+    Example
+    -------
+    The framework's three-regime mapping translates to::
+
+        {"calm":      {"leverage": 1.0, "k_per_sector": 5}}
+        {"moderate":  {"leverage": 0.7, "k_per_sector": 3}}
+        {"turbulent": {"leverage": 0.4, "k_per_sector": 2}}
+    """
+
+    leverage: float
+    long_quantile: float
+    short_quantile: float
+    k_per_sector: int
+
+
+# Type alias for C's regime overlay. Replaces the v0.1.0 `LeverageFn`
+# (Callable[..., float]) so the regime can communicate multiple risk knobs
+# in one call. See INTERFACE_VERSION at the bottom of this file.
+RegimeFn = Callable[[pd.Timestamp], RegimeParams]
 
 
 @dataclass(frozen=True)
@@ -71,8 +117,9 @@ class BacktestResult:
     turnover : pd.Series
         L1 turnover at each rebalance date, expressed as a fraction of NAV.
     leverage : pd.Series
-        The gross leverage actually applied on each trading day (output of
-        `leverage_fn` carried forward between rebalances).
+        The gross leverage actually applied on each trading day (the
+        `leverage` key of `regime_fn`'s output, or 1.0 when unset, carried
+        forward between rebalances).
     metadata : dict
         Free-form bookkeeping: train/test window sizes, cost assumption,
         random seed, software versions. Goes straight into the report.
@@ -98,7 +145,7 @@ def run_walk_forward_backtest(
     train_window: int,
     test_window: int,
     transaction_cost_bps: float = 10.0,
-    leverage_fn: LeverageFn | None = None,
+    regime_fn: RegimeFn | None = None,
     long_quantile: float = 0.9,
     short_quantile: float = 0.1,
     rebalance: str = "M",
@@ -150,13 +197,21 @@ def run_walk_forward_backtest(
     transaction_cost_bps : float, default 10.0
         Linear cost in basis points charged on the L1 turnover at each
         rebalance. 10 bps round-trip is a sane S&P 500 baseline.
-    leverage_fn : Callable[[pd.Timestamp], float], optional
-        Person C's regime overlay. Called once per trading day with that
-        day's timestamp; must return a scalar in [0, 1]. If `None`, the
-        backtest runs at constant 1.0x gross leverage (no regime overlay).
+    regime_fn : Callable[[pd.Timestamp], RegimeParams], optional
+        Person C's regime overlay. Called once per rebalance date with
+        that date's timestamp; must return a :class:`RegimeParams` dict.
+        The dict may include any subset of ``{leverage, long_quantile,
+        short_quantile, k_per_sector}``. Keys the regime does not set
+        fall back to the static defaults below (``long_quantile``,
+        ``short_quantile``) or to neutral values (``leverage=1.0``, no
+        ``k_per_sector`` override). If ``None``, the backtest runs at
+        constant 1.0x gross leverage using only the static quantile cutoffs
+        (i.e. no regime overlay).
     long_quantile, short_quantile : float
-        Cross-sectional quantile cutoffs for the long and short legs.
-        Defaults reproduce Gu-Kelly-Xiu's top/bottom decile.
+        Cross-sectional quantile cutoffs for the long and short legs,
+        used when ``regime_fn`` is ``None`` or when the regime dict does
+        not override them. Defaults reproduce Gu-Kelly-Xiu's top/bottom
+        decile.
     rebalance : str, default "M"
         Pandas offset alias for the rebalance frequency. "M" = last
         business day of each month.
@@ -193,6 +248,15 @@ def run_walk_forward_backtest(
 
 # --------------------------------------------------------------------------
 # Interface versioning - bump when the signature above changes.
+#
+# Changelog
+# ---------
+# 0.2.0 (2026-05-13): widened regime overlay from `LeverageFn`
+#   (Callable[..., float]) to `RegimeFn` (Callable[..., RegimeParams]) so
+#   the regime can communicate breadth (k_per_sector) and entry-threshold
+#   (long/short_quantile) overrides alongside leverage. See DECISIONS.md
+#   2026-05-13 "Widen regime overlay interface".
+# 0.1.0 (2026-05-11): initial contract (CrossSectionalModel + LeverageFn).
 # --------------------------------------------------------------------------
 
-INTERFACE_VERSION = "0.1.0"
+INTERFACE_VERSION = "0.2.0"
