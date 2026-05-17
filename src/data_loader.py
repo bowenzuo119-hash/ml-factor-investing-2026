@@ -18,6 +18,7 @@ Design principles:
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.request import urlretrieve
 
 import pandas as pd
 
@@ -26,6 +27,83 @@ import pandas as pd
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 RAW_DIR = DATA_DIR / "raw"
 PROCESSED_DIR = DATA_DIR / "processed"
+
+# S&P 500 historical membership source: github.com/fja05680/sp500
+# Maintained dataset of point-in-time index constituents, used to avoid
+# survivorship bias when building the investable universe.
+SP500_REPO_RAW = "https://raw.githubusercontent.com/fja05680/sp500/master"
+SP500_MEMBERSHIP_FILE = "sp500_ticker_start_end.csv"
+SP500_CURRENT_FILE = "sp500.csv"
+
+
+def download_sp500_universe(*, force: bool = False) -> dict[str, Path]:
+    """Download S&P 500 historical membership data to ``data/raw/``.
+
+    Pulls two CSVs from the fja05680/sp500 GitHub repository:
+
+    * ``sp500_ticker_start_end.csv`` - one row per (ticker, membership spell)
+      with columns ``ticker, start_date, end_date``. A blank ``end_date``
+      means the ticker is still in the index. This is the canonical source
+      for the point-in-time universe.
+    * ``sp500.csv`` - the current 500 constituents with GICS sector,
+      sub-industry, headquarters location, and date first added. Used as a
+      sector-classification reference table.
+
+    Parameters
+    ----------
+    force : bool, keyword-only, default False
+        If False (default), skip the download when the file already exists
+        locally. If True, re-download and overwrite.
+
+    Returns
+    -------
+    dict[str, Path]
+        Mapping from a short key (``"membership"``, ``"current"``) to the
+        local path of each downloaded file.
+
+    Notes
+    -----
+    Together these two files are ~5 MB. Re-running this with ``force=False``
+    is effectively free (a stat call per file), so other loader functions
+    can call it unconditionally to ensure the cache is populated.
+    """
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+
+    targets = {
+        "membership": (SP500_MEMBERSHIP_FILE, RAW_DIR / SP500_MEMBERSHIP_FILE),
+        "current": (SP500_CURRENT_FILE, RAW_DIR / SP500_CURRENT_FILE),
+    }
+
+    for key, (filename, local_path) in targets.items():
+        if local_path.exists() and not force:
+            print(f"[download_sp500_universe] cached: {local_path.name}")
+            continue
+        url = f"{SP500_REPO_RAW}/{filename}"
+        print(f"[download_sp500_universe] fetching {url}")
+        urlretrieve(url, local_path)
+        print(f"[download_sp500_universe] saved:  {local_path}")
+
+    return {key: path for key, (_, path) in targets.items()}
+
+
+def _load_membership_table() -> pd.DataFrame:
+    """Read the cached membership CSV into a typed DataFrame.
+
+    Auto-downloads if the file is missing. Parses dates and treats a blank
+    ``end_date`` as "still active" (mapped to ``pd.NaT``, which compares
+    correctly against any asof date when wrapped in fillna).
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: ``ticker`` (str), ``start_date`` (datetime64[ns]),
+        ``end_date`` (datetime64[ns], NaT means still in the index).
+    """
+    download_sp500_universe()  # no-op if cached
+    path = RAW_DIR / SP500_MEMBERSHIP_FILE
+    df = pd.read_csv(path, parse_dates=["start_date", "end_date"])
+    df["ticker"] = df["ticker"].astype(str).str.strip()
+    return df
 
 
 def load_prices(
@@ -119,18 +197,52 @@ def load_sp500_membership(asof: str) -> list[str]:
     """Return the S&P 500 constituent tickers as of a given date.
 
     Critical for avoiding survivorship bias: a 2015 backtest must use the
-    2015 roster, not today's. Source TBD (Wikipedia historical revisions,
-    CRSP, or a manually curated CSV checked into `data/reference/`).
+    2015 roster, not today's. Source: github.com/fja05680/sp500 (see
+    :func:`download_sp500_universe`), which provides per-ticker membership
+    spells back to the 1990s.
 
     Parameters
     ----------
     asof : str
-        ISO date. Returns the membership that was in force at end-of-day on
-        this date.
+        ISO date (``"YYYY-MM-DD"``). Returns the membership that was in
+        force at end-of-day on this date.
 
     Returns
     -------
     list[str]
-        Tickers, sorted alphabetically for reproducibility.
+        Tickers, sorted alphabetically for reproducibility. Empty list if
+        the date is before any recorded membership starts.
+
+    Raises
+    ------
+    ValueError
+        If ``asof`` cannot be parsed as a date.
     """
-    raise NotImplementedError("load_sp500_membership: needs a point-in-time source")
+    asof_ts = pd.Timestamp(asof)
+    table = _load_membership_table()
+    # A ticker was in the index on `asof` iff its spell had started by then
+    # and had not yet ended. Open spells have NaT end_date; treat as +inf.
+    started = table["start_date"] <= asof_ts
+    not_ended = table["end_date"].isna() | (table["end_date"] >= asof_ts)
+    active = table.loc[started & not_ended, "ticker"]
+    return sorted(active.unique().tolist())
+
+
+# --------------------------------------------------------------------------
+# Script entry point - run the data pipeline end-to-end.
+# --------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    paths = download_sp500_universe()
+    print()
+    print("Files on disk:")
+    for key, path in paths.items():
+        size_kb = path.stat().st_size / 1024
+        print(f"  {key:12s} {path}  ({size_kb:.1f} KB)")
+
+    # Smoke test: how many tickers were in the index at a few historical dates?
+    print()
+    print("Universe-size smoke test:")
+    for asof in ["2008-09-15", "2015-06-30", "2020-03-23", "2024-12-31"]:
+        tickers = load_sp500_membership(asof)
+        print(f"  {asof}: {len(tickers)} tickers (first 5: {tickers[:5]})")
