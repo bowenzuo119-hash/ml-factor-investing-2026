@@ -513,9 +513,7 @@ if __name__ == "__main__":
     print(f"Returns shape: {rets_wide.shape}, features shape: {feats.shape}")
     print()
 
-    def _sharpe(r: pd.Series) -> float:
-        s = r.std(ddof=1)
-        return float((r.mean() / s) * np.sqrt(12)) if s > 0 else 0.0
+    from src.metrics import summary_stats
 
     # --- Run A: baseline, no regime overlay (constant 1.0x leverage) ---
     res_baseline = run_walk_forward_backtest(
@@ -568,31 +566,30 @@ if __name__ == "__main__":
           f"{str(res_baseline.metadata['leverage_range']):>12s}  "
           f"{str(res_regime.metadata['leverage_range']):>12s}")
 
+    # --- Side-by-side performance metrics via src.metrics ---
+    base_stats = summary_stats(res_baseline.portfolio_returns)
+    reg_stats = summary_stats(res_regime.portfolio_returns)
+
     print()
     print(f"{'':30s}  {'Baseline':>12s}  {'+ Regime':>12s}")
     print(f"{'-' * 60}")
-    print(f"  {'Mean monthly net %':28s}  "
-          f"{res_baseline.portfolio_returns.mean() * 100:>+12.3f}  "
-          f"{res_regime.portfolio_returns.mean() * 100:>+12.3f}")
-    print(f"  {'Net annualised Sharpe':28s}  "
-          f"{_sharpe(res_baseline.portfolio_returns):>+12.3f}  "
-          f"{_sharpe(res_regime.portfolio_returns):>+12.3f}")
-    print(f"  {'Net return std %':28s}  "
-          f"{res_baseline.portfolio_returns.std(ddof=1) * 100:>12.3f}  "
-          f"{res_regime.portfolio_returns.std(ddof=1) * 100:>12.3f}")
+    for label, key, fmt in [
+        ("Annualised return %",   "annualised_return",     "{:>+12.3f}"),
+        ("Annualised volatility %","annualised_volatility", "{:>12.3f}"),
+        ("Sharpe ratio",          "sharpe_ratio",          "{:>+12.3f}"),
+        ("Max drawdown %",        "max_drawdown",          "{:>+12.3f}"),
+        ("Calmar ratio",          "calmar_ratio",          "{:>+12.3f}"),
+        ("Hit rate %",            "hit_rate",              "{:>12.3f}"),
+    ]:
+        v1 = base_stats[key] * 100 if "%" in label else base_stats[key]
+        v2 = reg_stats[key] * 100 if "%" in label else reg_stats[key]
+        print(f"  {label:28s}  {fmt.format(v1):>12s}  {fmt.format(v2):>12s}")
 
-    gross_sharpe = _sharpe(res_baseline.gross_returns)
     print()
+    gross_stats = summary_stats(res_baseline.gross_returns)
+    gross_sharpe = gross_stats["sharpe_ratio"]
     print(f"Sanity gate (baseline gross Sharpe): {gross_sharpe:+.3f}", end="  ")
     if abs(gross_sharpe) > 1.0:
         print("FAIL: |Sharpe| > 1.0 with random predictions -- look-ahead bug?")
     else:
         print("PASS: |Sharpe| <= 1.0 with random predictions")
-
-    print()
-    print("Regime overlay sanity:")
-    print(f"  avg_leverage went from {res_baseline.metadata['avg_leverage']:.3f} "
-          f"(baseline) to {res_regime.metadata['avg_leverage']:.3f} (regime)")
-    print(f"  Net vol shrank from {res_baseline.portfolio_returns.std(ddof=1)*100:.3f}% "
-          f"to {res_regime.portfolio_returns.std(ddof=1)*100:.3f}% "
-          "(regime caps leverage <= 1.0, so vol must <=)")
