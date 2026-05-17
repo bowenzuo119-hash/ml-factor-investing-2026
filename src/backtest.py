@@ -361,10 +361,15 @@ def run_walk_forward_backtest(
         # 2d. Build long-short portfolio: equal-weight within each leg,
         # dollar-neutral before leverage (|long sum| = |short sum| = 1.0),
         # then scaled by the regime's leverage multiplier.
+        # NOTE strict inequalities: when all scores are identical (e.g.
+        # UniformModel), both cutoffs collapse to the same value and a
+        # `>=` / `<=` rule would put every stock into BOTH legs, with the
+        # short overwriting the long -> 100% short portfolio. Strict
+        # `>` / `<` correctly yields an empty portfolio in that case.
         long_cut = scores.quantile(long_q)
         short_cut = scores.quantile(short_q)
-        longs = scores[scores >= long_cut].index
-        shorts = scores[scores <= short_cut].index
+        longs = scores[scores > long_cut].index
+        shorts = scores[scores < short_cut].index
 
         weights = pd.Series(0.0, index=scores.index, name=rebal_t)
         if len(longs) > 0:
