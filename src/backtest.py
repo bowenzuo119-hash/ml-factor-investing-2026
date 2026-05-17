@@ -239,10 +239,224 @@ def run_walk_forward_backtest(
       `data_loader.load_sp500_membership` to do this correctly.
     * Transaction costs are charged at the moment of rebalance, on the
       L1 weight change, BEFORE the regime leverage is applied (so a
-      regime-induced de-leverage also pays costs).
+      regime-induced de-leverage also pays costs). [NOT YET IMPLEMENTED
+      as of v0.2.0 -- see commit log for staging.]
     """
-    raise NotImplementedError(
-        "run_walk_forward_backtest: see issue #TODO for the implementation plan"
+    # --- 0. Validate inputs ---
+    if returns.empty:
+        raise ValueError("returns DataFrame is empty")
+    if features.empty:
+        raise ValueError("features DataFrame is empty")
+    if train_window < 1:
+        raise ValueError(f"train_window must be >= 1, got {train_window}")
+    if not (0 < short_quantile < long_quantile < 1):
+        raise ValueError(
+            f"need 0 < short_quantile ({short_quantile}) < "
+            f"long_quantile ({long_quantile}) < 1"
+        )
+
+    # --- 1. Rebalance dates: union of dates available in both returns and features ---
+    rebal_dates = (
+        returns.index.intersection(features.index.get_level_values(0).unique())
+        .sort_values()
+        .unique()
+    )
+    if len(rebal_dates) < train_window + 2:
+        raise ValueError(
+            f"not enough rebalance dates ({len(rebal_dates)}) for "
+            f"train_window={train_window} + at least one prediction step"
+        )
+
+    # --- 2. Walk-forward loop ---
+    # At each date t in [rebal_dates[train_window], ..., rebal_dates[-2]]:
+    #   - train on features[t-train_window : t-1] with labels = returns[t-train_window+1 : t]
+    #   - predict scores at t
+    #   - form L/S portfolio
+    #   - charge transaction cost on L1 turnover vs the previous rebalance
+    #   - realise net next-period return
+    weights_records: list[tuple[pd.Timestamp, pd.Series]] = []
+    gross_returns_list: list[tuple[pd.Timestamp, float]] = []
+    net_returns_list: list[tuple[pd.Timestamp, float]] = []
+    turnover_records: list[tuple[pd.Timestamp, float]] = []
+    leverage_records: list[tuple[pd.Timestamp, float]] = []
+    k_per_sector_warned = False  # warn at most once per backtest
+    prev_weights: pd.Series = pd.Series(dtype=float)  # empty at t=0
+    cost_rate = transaction_cost_bps / 10_000.0  # bps -> fraction
+
+    for i in range(train_window, len(rebal_dates) - 1):
+        rebal_t = rebal_dates[i]
+        next_t = rebal_dates[i + 1]
+        train_t0 = rebal_dates[i - train_window]
+
+        # 2a. Build training panel: features at dates [train_t0, rebal_t),
+        # paired with NEXT-period return as the label.
+        train_dates = rebal_dates[i - train_window : i]
+        X_train = features.loc[(slice(train_t0, train_dates[-1]), slice(None)), :]
+        # Labels: returns at the date AFTER each feature date.
+        # rebal_dates is sorted, so use the next-date map.
+        next_date_map = dict(zip(train_dates, rebal_dates[i - train_window + 1 : i + 1]))
+        y_train_rows = []
+        for (d, asset) in X_train.index:
+            nd = next_date_map.get(d)
+            if nd is None:
+                y_train_rows.append(float("nan"))
+                continue
+            if asset in returns.columns:
+                y_train_rows.append(returns.at[nd, asset])
+            else:
+                y_train_rows.append(float("nan"))
+        y_train = pd.Series(y_train_rows, index=X_train.index, name="next_return")
+
+        # Drop rows where label is NaN (asset not yet listed / delisted)
+        keep = y_train.notna()
+        X_train = X_train.loc[keep]
+        y_train = y_train.loc[keep]
+
+        if len(X_train) == 0:
+            continue  # nothing to train on this step, skip
+
+        model = model.fit(X_train, y_train)
+
+        # 2b. Predict at rebal_t for eligible universe
+        if rebal_t not in features.index.get_level_values(0):
+            continue
+        X_pred = features.loc[(rebal_t, slice(None)), :]
+        # Eligible: must also have a non-NaN return at next_t
+        eligible_assets = [
+            a for (_, a) in X_pred.index
+            if a in returns.columns and pd.notna(returns.at[next_t, a])
+        ]
+        if not eligible_assets:
+            continue
+        X_pred = X_pred.loc[(rebal_t, eligible_assets), :]
+        scores = model.predict(X_pred)
+        # scores' index may be (date, asset) -- collapse to just asset
+        if isinstance(scores.index, pd.MultiIndex):
+            scores = scores.reset_index(level=0, drop=True)
+
+        # 2c. Consult the regime overlay (if provided) for this rebalance's
+        # risk parameters. Missing keys fall back to the static defaults
+        # passed to this function (or to leverage=1.0, no k_per_sector).
+        if regime_fn is not None:
+            regime_params: RegimeParams = regime_fn(rebal_t) or {}
+        else:
+            regime_params = {}
+
+        long_q = regime_params.get("long_quantile", long_quantile)
+        short_q = regime_params.get("short_quantile", short_quantile)
+        leverage_t = float(regime_params.get("leverage", 1.0))
+
+        if "k_per_sector" in regime_params and not k_per_sector_warned:
+            import warnings
+            warnings.warn(
+                "regime_fn returned 'k_per_sector' but sector-neutral "
+                "construction is not yet implemented in this backtest "
+                "(staged for a follow-up commit). Falling back to global "
+                "quantile-based selection. This warning fires at most once.",
+                UserWarning,
+                stacklevel=2,
+            )
+            k_per_sector_warned = True
+
+        # 2d. Build long-short portfolio: equal-weight within each leg,
+        # dollar-neutral before leverage (|long sum| = |short sum| = 1.0),
+        # then scaled by the regime's leverage multiplier.
+        # NOTE strict inequalities: when all scores are identical (e.g.
+        # UniformModel), both cutoffs collapse to the same value and a
+        # `>=` / `<=` rule would put every stock into BOTH legs, with the
+        # short overwriting the long -> 100% short portfolio. Strict
+        # `>` / `<` correctly yields an empty portfolio in that case.
+        long_cut = scores.quantile(long_q)
+        short_cut = scores.quantile(short_q)
+        longs = scores[scores > long_cut].index
+        shorts = scores[scores < short_cut].index
+
+        weights = pd.Series(0.0, index=scores.index, name=rebal_t)
+        if len(longs) > 0:
+            weights.loc[longs] = 1.0 / len(longs)
+        if len(shorts) > 0:
+            weights.loc[shorts] = -1.0 / len(shorts)
+        weights = weights * leverage_t  # regime-scaled exposure
+        weights_records.append((rebal_t, weights))
+        leverage_records.append((rebal_t, leverage_t))
+
+        # 2d. Charge transaction cost on L1 turnover vs the previous rebalance.
+        # First rebalance: prev_weights is empty, so turnover = sum(|w|) -- this
+        # is the cost of entering positions from cash.
+        union = weights.index.union(prev_weights.index)
+        w_now = weights.reindex(union, fill_value=0.0)
+        w_prev = prev_weights.reindex(union, fill_value=0.0)
+        turnover_t = float((w_now - w_prev).abs().sum())
+        cost_t = cost_rate * turnover_t
+        turnover_records.append((rebal_t, turnover_t))
+
+        # 2e. Realise next-period return.
+        # gross = w . r_{t+1}; net = gross - cost (cost charged in the same period
+        # as the rebalance, i.e. attributed to the return earned over [t, t+1]).
+        next_period_rets = returns.loc[next_t, weights.index]
+        gross_t = float((weights * next_period_rets).sum(skipna=True))
+        net_t = gross_t - cost_t
+        gross_returns_list.append((next_t, gross_t))
+        net_returns_list.append((next_t, net_t))
+
+        prev_weights = weights  # carry into next iteration
+
+    # --- 3. Assemble BacktestResult ---
+    if not net_returns_list:
+        raise RuntimeError(
+            "No rebalance produced a portfolio. Check input alignment and "
+            "that train_window leaves at least one prediction date."
+        )
+
+    portfolio_returns = pd.Series(
+        dict(net_returns_list), name="portfolio_return"
+    ).sort_index()
+    gross_returns = pd.Series(
+        dict(gross_returns_list), name="gross_return"
+    ).sort_index()
+
+    # Wide weights DataFrame: rows = rebalance dates, cols = union of all assets
+    all_assets = sorted({a for _, w in weights_records for a in w.index})
+    rebal_dates_used = [d for d, _ in weights_records]
+    weights_df = pd.DataFrame(0.0, index=pd.Index(rebal_dates_used, name="date"),
+                              columns=all_assets)
+    for d, w in weights_records:
+        weights_df.loc[d, w.index] = w.values
+
+    turnover_series = pd.Series(
+        dict(turnover_records), name="turnover"
+    ).sort_index()
+    leverage_series = pd.Series(
+        dict(leverage_records), name="leverage"
+    ).sort_index()
+
+    metadata = {
+        "interface_version": INTERFACE_VERSION,
+        "n_rebalances": len(net_returns_list),
+        "first_rebalance": rebal_dates_used[0],
+        "last_rebalance": rebal_dates_used[-1],
+        "train_window": train_window,
+        "test_window": test_window,
+        "long_quantile": long_quantile,
+        "short_quantile": short_quantile,
+        "rebalance": rebalance,
+        "transaction_cost_bps": transaction_cost_bps,
+        "transaction_costs_applied": True,
+        "total_cost_drag_pct": (gross_returns.sum() - portfolio_returns.sum()) * 100,
+        "avg_monthly_turnover": float(turnover_series.mean()),
+        "regime_fn_applied": regime_fn is not None,
+        "avg_leverage": float(leverage_series.mean()),
+        "leverage_range": (float(leverage_series.min()), float(leverage_series.max())),
+        "random_state": random_state,
+    }
+
+    return BacktestResult(
+        portfolio_returns=portfolio_returns,
+        gross_returns=gross_returns,
+        weights=weights_df,
+        turnover=turnover_series,
+        leverage=leverage_series,
+        metadata=metadata,
     )
 
 
@@ -260,3 +474,127 @@ def run_walk_forward_backtest(
 # --------------------------------------------------------------------------
 
 INTERFACE_VERSION = "0.2.0"
+
+
+# --------------------------------------------------------------------------
+# Smoke test (run with: python -m src.backtest)
+# Builds a small in-memory toy panel and runs the engine with RandomModel.
+# Sharpe must be approximately zero -- this is sanity check #1 from
+# Project Framework §4.6.
+# --------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import numpy as np
+
+    from src.sanity import RandomModel
+
+    print("=" * 70)
+    print("Backtest engine smoke test (RandomModel + synthetic panel)")
+    print("=" * 70)
+
+    # Synthetic monthly panel: 60 dates x 50 assets
+    rng = np.random.default_rng(42)
+    n_dates, n_assets = 60, 50
+    dates = pd.date_range("2015-01-31", periods=n_dates, freq="ME")
+    assets = [f"A{i:03d}" for i in range(n_assets)]
+
+    # Wide-format returns: random monthly returns ~ N(0, 5%)
+    rets_wide = pd.DataFrame(
+        rng.normal(0.0, 0.05, size=(n_dates, n_assets)),
+        index=dates,
+        columns=assets,
+    )
+
+    # Long-format features: 3 random features per (date, asset).
+    # RandomModel doesn't use them, but the engine validates the shape.
+    feat_idx = pd.MultiIndex.from_product([dates, assets], names=["date", "asset"])
+    feats = pd.DataFrame(
+        rng.normal(0, 1, size=(n_dates * n_assets, 3)),
+        index=feat_idx,
+        columns=["feat1", "feat2", "feat3"],
+    )
+
+    print(f"\nSynthetic panel: {n_dates} months x {n_assets} assets")
+    print(f"Returns shape: {rets_wide.shape}, features shape: {feats.shape}")
+    print()
+
+    from src.metrics import summary_stats
+
+    # --- Run A: baseline, no regime overlay (constant 1.0x leverage) ---
+    res_baseline = run_walk_forward_backtest(
+        returns=rets_wide,
+        features=feats,
+        model=RandomModel(random_state=42),
+        train_window=12,
+        test_window=12,
+        long_quantile=0.9,
+        short_quantile=0.1,
+        transaction_cost_bps=10.0,
+    )
+
+    # --- Run B: with regime_fn that cycles through 3 regimes ---
+    # First third of test = calm (1.0x), middle = moderate (0.7x), last = turbulent (0.4x).
+    def cycling_regime(ts: pd.Timestamp) -> RegimeParams:
+        # Use month rank from the start of the test window
+        month_idx = (ts.year - 2015) * 12 + ts.month
+        if month_idx < 35:
+            return {"leverage": 1.0}
+        elif month_idx < 55:
+            return {"leverage": 0.7}
+        else:
+            return {"leverage": 0.4}
+
+    res_regime = run_walk_forward_backtest(
+        returns=rets_wide,
+        features=feats,
+        model=RandomModel(random_state=42),
+        train_window=12,
+        test_window=12,
+        long_quantile=0.9,
+        short_quantile=0.1,
+        transaction_cost_bps=10.0,
+        regime_fn=cycling_regime,
+    )
+
+    print(f"{'':30s}  {'Baseline':>12s}  {'+ Regime':>12s}")
+    print(f"{'-' * 60}")
+    for label, key, fmt in [
+        ("n_rebalances",          "n_rebalances",          "{:>12d}"),
+        ("avg_monthly_turnover",  "avg_monthly_turnover",  "{:>12.3f}"),
+        ("avg_leverage",          "avg_leverage",          "{:>12.3f}"),
+        ("regime_fn_applied",     "regime_fn_applied",     "{:>12}"),
+    ]:
+        v1 = res_baseline.metadata[key]
+        v2 = res_regime.metadata[key]
+        print(f"  {label:28s}  {fmt.format(v1):>12s}  {fmt.format(v2):>12s}")
+    print(f"  {'leverage_range':28s}  "
+          f"{str(res_baseline.metadata['leverage_range']):>12s}  "
+          f"{str(res_regime.metadata['leverage_range']):>12s}")
+
+    # --- Side-by-side performance metrics via src.metrics ---
+    base_stats = summary_stats(res_baseline.portfolio_returns)
+    reg_stats = summary_stats(res_regime.portfolio_returns)
+
+    print()
+    print(f"{'':30s}  {'Baseline':>12s}  {'+ Regime':>12s}")
+    print(f"{'-' * 60}")
+    for label, key, fmt in [
+        ("Annualised return %",   "annualised_return",     "{:>+12.3f}"),
+        ("Annualised volatility %","annualised_volatility", "{:>12.3f}"),
+        ("Sharpe ratio",          "sharpe_ratio",          "{:>+12.3f}"),
+        ("Max drawdown %",        "max_drawdown",          "{:>+12.3f}"),
+        ("Calmar ratio",          "calmar_ratio",          "{:>+12.3f}"),
+        ("Hit rate %",            "hit_rate",              "{:>12.3f}"),
+    ]:
+        v1 = base_stats[key] * 100 if "%" in label else base_stats[key]
+        v2 = reg_stats[key] * 100 if "%" in label else reg_stats[key]
+        print(f"  {label:28s}  {fmt.format(v1):>12s}  {fmt.format(v2):>12s}")
+
+    print()
+    gross_stats = summary_stats(res_baseline.gross_returns)
+    gross_sharpe = gross_stats["sharpe_ratio"]
+    print(f"Sanity gate (baseline gross Sharpe): {gross_sharpe:+.3f}", end="  ")
+    if abs(gross_sharpe) > 1.0:
+        print("FAIL: |Sharpe| > 1.0 with random predictions -- look-ahead bug?")
+    else:
+        print("PASS: |Sharpe| <= 1.0 with random predictions")
