@@ -721,6 +721,122 @@ def load_prices_yfinance(
     )
 
 
+def compare_crsp_vs_yfinance(
+    *,
+    start: str = "2018-01-01",
+    end: str = "2022-12-31",
+    sample_size: int | None = 50,
+    random_state: int = 42,
+) -> pd.DataFrame:
+    """Cross-validate CRSP returns against yfinance over an overlap window.
+
+    Both sources are supposed to give the same monthly total return for the
+    same company on the same month. If they don't, splicing them into one
+    time series is unsafe -- a model trained on CRSP-era returns will see
+    a sudden regime shift at the splice point that has nothing to do with
+    the market.
+
+    Method:
+        1. Pull CRSP for [start, end] and restrict to PERMNOs that were
+           S&P 500 members at some point in the window.
+        2. For each PERMNO, find its most-recent in-window CRSP ticker --
+           this is the ticker yfinance is most likely to recognise, since
+           Yahoo retrofits ticker changes (FB -> META) but doesn't preserve
+           the old symbol.
+        3. Pull yfinance for that ticker set.
+        4. Per-ticker, compute Pearson correlation and mean / max absolute
+           difference of monthly returns over the joint sample.
+
+    Parameters
+    ----------
+    start, end : str, optional
+        Overlap window. Default 2018-2022 (CRSP ends 2022-12-30).
+    sample_size : int, optional
+        Number of PERMNOs to subsample (deterministic via ``random_state``).
+        ``None`` = all (slow: 500+ tickers, several minutes). Default 50.
+    random_state : int
+        Seeds the subsample for reproducibility.
+
+    Returns
+    -------
+    pd.DataFrame
+        Indexed by ticker, sorted ascending by correlation (worst at top).
+        Columns: ``n_months``, ``correlation``, ``mean_abs_diff_bps``,
+        ``max_abs_diff_bps``.
+
+        Healthy splice expectations (per Project Framework spirit):
+            * Median correlation should be > 0.99.
+            * Median mean_abs_diff_bps should be < 10 (1 bp = 0.01%).
+            * Outliers (correlation < 0.9 or max_abs_diff > 500 bps) almost
+              always indicate ticker reuse or a yfinance backfill error;
+              inspect by ticker before trusting the splice.
+    """
+    crsp = load_prices(start=start, end=end).copy()
+    members = set(_sp500_union_in_window(start, end))
+    crsp = crsp[crsp["ticker"].isin(members)]
+
+    permno_to_latest = (
+        crsp.reset_index()
+        .sort_values("date")
+        .groupby("permno")["ticker"]
+        .last()
+        .dropna()
+    )
+    print(
+        f"[compare] {len(permno_to_latest)} unique PERMNOs in CRSP that were "
+        f"S&P 500 members at some point in {start} -> {end}"
+    )
+
+    if sample_size is not None and len(permno_to_latest) > sample_size:
+        permno_to_latest = permno_to_latest.sample(
+            n=sample_size, random_state=random_state
+        )
+        print(
+            f"[compare] subsampling {sample_size} PERMNOs "
+            f"(random_state={random_state})"
+        )
+
+    yf_tickers = tuple(sorted(set(permno_to_latest.values)))
+    yf = _load_yfinance_monthly_raw(yf_tickers, start=start, end=end)
+
+    crsp_sample = (
+        crsp[
+            crsp.index.get_level_values("permno").isin(permno_to_latest.index)
+        ].reset_index()
+    )
+    crsp_sample["latest_ticker"] = crsp_sample["permno"].map(permno_to_latest)
+    crsp_ret = (
+        crsp_sample.groupby(["date", "latest_ticker"])["ret"]
+        .last()
+        .unstack("latest_ticker")
+    )
+    yf_ret = yf["ret"].unstack("ticker")
+
+    common = sorted(set(crsp_ret.columns) & set(yf_ret.columns))
+    rows = []
+    for tkr in common:
+        joint = pd.concat(
+            [crsp_ret[tkr].rename("crsp"), yf_ret[tkr].rename("yf")],
+            axis=1,
+        ).dropna()
+        if len(joint) < 6:
+            continue
+        diff = joint["crsp"] - joint["yf"]
+        rows.append(
+            {
+                "ticker": tkr,
+                "n_months": len(joint),
+                "correlation": joint["crsp"].corr(joint["yf"]),
+                "mean_abs_diff_bps": float(diff.abs().mean() * 1e4),
+                "max_abs_diff_bps": float(diff.abs().max() * 1e4),
+            }
+        )
+
+    return (
+        pd.DataFrame(rows).set_index("ticker").sort_values("correlation")
+    )
+
+
 def load_sp500_membership(asof: str) -> list[str]:
     """Return the S&P 500 constituent tickers as of a given date.
 
