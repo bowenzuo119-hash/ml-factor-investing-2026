@@ -2,7 +2,7 @@
 
 This module is the **integration point** between three workstreams:
 
-    Person A (this file): provides `run_walk_forward_backtest`.
+    Person A (Bowen Zuo)(this file): provides `run_walk_forward_backtest`.
     Person B           : provides a `fit` / `predict` model object that
                           produces cross-sectional return forecasts.
     Person C           : provides a `regime_fn` that maps a date to a
