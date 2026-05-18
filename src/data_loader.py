@@ -382,20 +382,21 @@ def _load_yfinance_monthly_raw(
     end_ts = pd.Timestamp(end)
 
     # --- Cache hit path -------------------------------------------------
-    # Compare in month-end space: a request for [2022-12-01, 2023-12-31]
-    # actually wants month-ends 2022-12-31 ... 2023-12-31, so cache that
-    # spans those month-ends is a hit even if the literal `start_ts` falls
-    # before any cached date.
-    expected_months = pd.date_range(start_ts, end_ts, freq="ME")
-    if not force_rebuild and cache_path.exists() and len(expected_months) > 0:
+    # Compare in month-PERIOD space: the loader stores trading-day
+    # month-ends (e.g. 2022-12-30), but a request for [2022-12-01,
+    # 2023-12-31] expects coverage of month-periods 2022-12 ... 2023-12.
+    # Comparing periods avoids day-of-month mismatches.
+    expected_periods = pd.period_range(start_ts, end_ts, freq="M")
+    if not force_rebuild and cache_path.exists() and len(expected_periods) > 0:
         cached = pd.read_parquet(cache_path)
         cached_tickers = set(cached.index.get_level_values("ticker"))
         cached_dates = cached.index.get_level_values("date")
-        needed_min, needed_max = expected_months[0], expected_months[-1]
+        cached_periods = pd.PeriodIndex(cached_dates, freq="M")
+        needed_min, needed_max = expected_periods[0], expected_periods[-1]
         if (
             set(requested).issubset(cached_tickers)
-            and cached_dates.min() <= needed_min
-            and cached_dates.max() >= needed_max
+            and cached_periods.min() <= needed_min
+            and cached_periods.max() >= needed_max
         ):
             print(
                 f"[load_yfinance] cache hit: {len(requested)} tickers, "
@@ -444,8 +445,17 @@ def _load_yfinance_monthly_raw(
         if sub.empty or sub["Close"].dropna().empty:
             print(f"[load_yfinance] no data: {tkr}")
             continue
-        # Resample daily -> month-end: take the last trading day's row.
-        monthly = sub.resample("ME").last()
+        # Snap to the LAST TRADING DAY of each month (e.g. 2022-12-30, not
+        # the calendar 2022-12-31) so the index aligns with CRSP MSF, which
+        # also uses trading-day month-ends. Plain `resample("ME").last()`
+        # re-labels the row to the calendar month-end, which would prevent
+        # a clean date-level join with CRSP at year-ends and holidays.
+        monthly = (
+            sub.assign(_month=sub.index.to_period("M"))
+            .groupby("_month", group_keys=False)
+            .tail(1)
+            .drop(columns="_month")
+        )
         monthly["ret"] = monthly["Close"].pct_change()
         monthly = monthly.rename(
             columns={
