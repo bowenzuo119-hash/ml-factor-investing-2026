@@ -191,6 +191,24 @@ Every time you make a non-trivial "choose A over B" decision, add a new entry us
 **Revisit if:** Person C needs the S&P 500 daily series urgently (then build `load_market_index()` immediately), or if we extend the macro feature set beyond the Framework's 6 (e.g., adding TED spread, MOVE index, etc. — would just extend `DEFAULT_MACRO_SERIES`).
 
 
+## 2026-05-18 — Implement the yfinance splice (supersedes 2026-05-13 planned entry)
+
+**Context:** School has no ongoing CRSP licence (vendor-shared file ends 2022-12-30 and can't be refreshed). Project Framework's test window is 2019-2024, so the planned splice (2026-05-13 entry) is no longer deferrable. Person B will need a single loader that spans the full window.
+
+**Options considered:** (a) Build a fresh `load_prices_yfinance` + splice in this PR, exactly as the 2026-05-13 plan describes, with the four safeguards (overlap check, ticker reconciliation, dual reporting, this DECISIONS entry). (b) Pivot the whole pipeline to yfinance and drop CRSP — frees us from licence concerns but throws away the 1925-2022 quality history; yfinance has known issues with delistings and pre-2000 coverage. (c) Pay for a Sharadar / Tiingo subscription — adds budget where free options work, and ~10-day procurement lag.
+
+**Decision:** Option (a). Implemented as four commits in this PR: `_load_yfinance_monthly_raw` (chunked + month-end-aligned), `load_prices_yfinance` (public wrapper with S&P 500 union universe), `compare_crsp_vs_yfinance` + `notebooks/persona/yfinance_overlap_check.py` (validation gate), and `load_prices_spliced` (CRSP ≤ 2022-12-30 + yfinance ≥ 2023-01-31 with PERMNO → latest-ticker canonicalisation and buffer-month return computation).
+
+**Reasoning:** The overlap-check script ran on 200 S&P 500 stocks (2018-2022 window) and showed median return correlation 0.999999 between CRSP and yfinance, with 97% of matched tickers above 0.99 and only 3 known PERMNO-reuse outliers (GEN, TAP, CZR). Splice is safe to basis-point precision. The cost-free CRSP-grade backbone of 1925-2022 is preserved; yfinance only fills the recent ~2 years where corporate-action precision matters less than data availability.
+
+**Implementation notes:**
+- The yfinance loader chunks downloads in batches of 100 with a 2-second sleep between chunks, because Yahoo's per-IP rate limit kicks in on bulk requests that spawn parallel sub-requests. On rate-limit failure the loader falls back to the parquet cache rather than crashing.
+- Splice canonical identifier is **ticker** (CRSP rows mapped via PERMNO → latest in-window ticker), because yfinance has no PERMNO concept. A small number of share-class collisions (BIO, LEN, MKC — Class A vs Class B as separate PERMNOs) are warned about; the splice keeps the first PERMNO seen.
+- ~16% of S&P 500 tickers fail to fetch from yfinance (SIVB, VAR, WRK, ATVI, ...) because Yahoo doesn't preserve delisted symbols. Their history ends cleanly at the CRSP cutoff; the downstream backtest's NaN handling silently skips them. This is the unavoidable cost of yfinance's free-tier coverage.
+
+**Revisit if:** TA produces an updated CRSP that covers 2023-2024 (then deprecate the yfinance half and re-route through CRSP), or if a future overlap-check run shows median correlation drop below 0.99 (then debug what changed in yfinance's data quality).
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:

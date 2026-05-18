@@ -7,11 +7,15 @@ here.
 
 Sources (see DECISIONS.md for the why):
     * Monthly equity prices and returns: CRSP MSF (vendor-provided CSV in
-      `data/raw/CRSPData_*.csv`), loaded via `load_prices`.
+      `data/raw/CRSPData_*.csv`), loaded via `load_prices`. Covers 1925-12
+      to 2022-12.
+    * Out-of-sample tail (2023-2024): yfinance, loaded via
+      `load_prices_yfinance`. Used to extend CRSP through the most recent
+      year for live-data evaluation; school has no ongoing CRSP licence.
     * S&P 500 historical membership: fja05680/sp500 GitHub CSVs, loaded via
       `load_sp500_membership`.
-    * Macro / regime features: FRED via `pandas-datareader` (TODO,
-      `load_macro`).
+    * Macro / regime features: FRED via `pandas-datareader`, loaded via
+      `load_macro`.
 
 Design principles:
     * Read each raw source at most once; persist a cleaned version to
@@ -47,6 +51,18 @@ SP500_CURRENT_FILE = "sp500.csv"
 # 2022-12, all US listed common stocks (~37k unique PERMNOs).
 CRSP_MONTHLY_FILE = "CRSPData_1925_2022.csv"
 CRSP_MONTHLY_CACHE = "crsp_monthly.parquet"
+
+# Splice point between CRSP (primary, through 2022-12-30) and yfinance
+# (fallback, from 2023-01 onward). Pin as a constant so the splice function
+# and any downstream "where does the data switch?" warning use one source
+# of truth. Bumped when a CRSP refresh extends our coverage.
+CRSP_LAST_DATE = pd.Timestamp("2022-12-30")
+
+# yfinance cache: union of all (ticker, month) ever fetched. Lets the loader
+# serve overlapping requests (e.g. two backtests with different date windows
+# on the same universe) without re-hitting the network. See
+# `_load_yfinance_monthly_raw` for the cache hit/miss rules.
+YFINANCE_MONTHLY_CACHE = "yfinance_monthly.parquet"
 
 # FRED macro series for Person C's regime model. Picked per Project
 # Framework §4.4 ("Macro for Person C: VIX, DGS10, DGS2, DBAA, DAAA, DFF").
@@ -295,6 +311,239 @@ def load_prices(
     return df.loc[(slice(start_ts, end_ts), slice(None)), :]
 
 
+def _load_yfinance_monthly_raw(
+    tickers: tuple[str, ...] | list[str],
+    *,
+    start: str,
+    end: str,
+    force_rebuild: bool = False,
+) -> pd.DataFrame:
+    """Download daily OHLCV from yfinance, resample to month-end, cache to parquet.
+
+    yfinance is the project's fallback price source for 2023+ since the
+    school has no ongoing CRSP licence (DECISIONS 2026-05-18 'School has no
+    CRSP — yfinance for 2023+'). This loader is schema-compatible with the
+    CRSP loader so the two can be spliced:
+
+        * Same MultiIndex layout (date, identifier) -- here ``ticker`` not
+          ``permno`` because yfinance has no PERMNO concept.
+        * Same monthly ``ret`` column, computed from auto-adjusted close
+          (splits AND dividends adjusted, so equivalent to CRSP's total
+          return).
+        * Same month-end date convention (last available trading day of
+          the month).
+
+    Cache strategy: store union of all (ticker, date) ever fetched in one
+    parquet. A cache HIT happens when (a) every requested ticker is in the
+    cache AND (b) the cached date range fully covers the request. Otherwise
+    the full request is re-fetched and merged in. Costs bandwidth on the
+    first call but is essentially free thereafter.
+
+    Parameters
+    ----------
+    tickers : tuple[str, ...] or list[str]
+        Yahoo ticker symbols (e.g. ``["AAPL", "MSFT"]``). Order does not
+        matter; symbols are uppercased and de-duplicated. Output is sorted
+        by (date, ticker).
+    start : str
+        Inclusive start date (ISO).
+    end : str
+        Inclusive end date (ISO). yfinance's own ``end`` is exclusive; this
+        loader bumps it by one day so the user-facing semantics match the
+        rest of this module.
+    force_rebuild : bool, keyword-only, default False
+        Bypass the cache and re-download.
+
+    Returns
+    -------
+    pd.DataFrame
+        Long-format frame indexed by ``(date, ticker)`` MultiIndex with
+        columns:
+
+        =========== =================================================
+        Column      Description
+        =========== =================================================
+        open        Month-end-day's open price (USD, split-adjusted)
+        high        Month-end-day's high
+        low         Month-end-day's low
+        adj_close   Month-end-day's adjusted close (splits + divs)
+        volume      Month-end-day's volume (shares)
+        ret         Monthly total return derived from adj_close
+        =========== =================================================
+
+    Notes
+    -----
+    * The first month of any ticker's data has ``ret == NaN`` (no prior
+      month to diff against). Downstream code should ``.dropna()`` or be
+      tolerant; subsequent calls that extend the cache backward will fill
+      in the missing return.
+    * Tickers that return no data (delisted before ``start``, never existed,
+      Yahoo outage) are logged and silently skipped. Caller must check
+      ``df.index.get_level_values("ticker").unique()`` against what they
+      asked for.
+    """
+    cache_path = PROCESSED_DIR / YFINANCE_MONTHLY_CACHE
+    requested = tuple(sorted({str(t).strip().upper() for t in tickers}))
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+
+    # --- Cache hit path -------------------------------------------------
+    # Compare in month-PERIOD space: the loader stores trading-day
+    # month-ends (e.g. 2022-12-30), but a request for [2022-12-01,
+    # 2023-12-31] expects coverage of month-periods 2022-12 ... 2023-12.
+    # Comparing periods avoids day-of-month mismatches.
+    expected_periods = pd.period_range(start_ts, end_ts, freq="M")
+    if not force_rebuild and cache_path.exists() and len(expected_periods) > 0:
+        cached = pd.read_parquet(cache_path)
+        cached_tickers = set(cached.index.get_level_values("ticker"))
+        cached_dates = cached.index.get_level_values("date")
+        cached_periods = pd.PeriodIndex(cached_dates, freq="M")
+        needed_min, needed_max = expected_periods[0], expected_periods[-1]
+        if (
+            set(requested).issubset(cached_tickers)
+            and cached_periods.min() <= needed_min
+            and cached_periods.max() >= needed_max
+        ):
+            print(
+                f"[load_yfinance] cache hit: {len(requested)} tickers, "
+                f"{start_ts.date()} -> {end_ts.date()}"
+            )
+            d = cached.index.get_level_values("date")
+            t = cached.index.get_level_values("ticker")
+            mask = (d >= start_ts) & (d <= end_ts) & t.isin(requested)
+            return cached.loc[mask].sort_index()
+
+    # --- Cache miss: fetch from Yahoo -----------------------------------
+    import time
+    import yfinance as yf
+
+    # yfinance's `end` is exclusive; bump by 1 day for inclusive semantics.
+    yf_end = (end_ts + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+    # Chunk the request: Yahoo's per-IP rate limit triggers when yfinance
+    # parallelises a 500-ticker download into many short parallel
+    # requests. Smaller chunks with a polite delay between them keep us
+    # under the limit.
+    CHUNK_SIZE = 100
+    CHUNK_SLEEP_SEC = 2.0
+    n_chunks = (len(requested) + CHUNK_SIZE - 1) // CHUNK_SIZE
+
+    print(
+        f"[load_yfinance] downloading {len(requested)} tickers in "
+        f"{n_chunks} chunk(s) of <= {CHUNK_SIZE} "
+        f"({start_ts.date()} -> {end_ts.date()})..."
+    )
+
+    frames: list[pd.DataFrame] = []
+    for chunk_ix in range(n_chunks):
+        chunk = list(requested[chunk_ix * CHUNK_SIZE : (chunk_ix + 1) * CHUNK_SIZE])
+        if n_chunks > 1:
+            print(
+                f"[load_yfinance]   chunk {chunk_ix + 1}/{n_chunks}: "
+                f"{len(chunk)} tickers"
+            )
+
+        raw = yf.download(
+            tickers=chunk,
+            start=start,
+            end=yf_end,
+            interval="1d",
+            auto_adjust=True,
+            progress=False,
+            threads=True,
+            group_by="ticker",
+        )
+
+        # Column layout depends on ticker count in THIS chunk:
+        #   * len > 1  -> MultiIndex (ticker, field)
+        #   * len == 1 -> flat columns; wrap to look the same.
+        if isinstance(raw.columns, pd.MultiIndex):
+            per_ticker = {
+                t: raw[t]
+                for t in chunk
+                if t in raw.columns.get_level_values(0)
+            }
+        else:
+            per_ticker = {chunk[0]: raw}
+
+        for tkr, sub in per_ticker.items():
+            if sub.empty or sub["Close"].dropna().empty:
+                print(f"[load_yfinance]     no data: {tkr}")
+                continue
+            # Snap to the LAST TRADING DAY of each month (e.g. 2022-12-30,
+            # not the calendar 2022-12-31) so the index aligns with CRSP MSF.
+            # Plain resample('ME').last() re-labels to the calendar month-end.
+            monthly = (
+                sub.assign(_month=sub.index.to_period("M"))
+                .groupby("_month", group_keys=False)
+                .tail(1)
+                .drop(columns="_month")
+            )
+            monthly["ret"] = monthly["Close"].pct_change()
+            monthly = monthly.rename(
+                columns={
+                    "Open": "open", "High": "high", "Low": "low",
+                    "Close": "adj_close", "Volume": "volume",
+                }
+            )
+            monthly["ticker"] = tkr
+            monthly.index.name = "date"
+            frames.append(
+                monthly.reset_index()
+                .set_index(["date", "ticker"])
+                [["open", "high", "low", "adj_close", "volume", "ret"]]
+            )
+
+        # Polite pause between chunks (skip after the last one).
+        if chunk_ix + 1 < n_chunks:
+            time.sleep(CHUNK_SLEEP_SEC)
+
+    if not frames:
+        # Yahoo returned nothing for every chunk -- usually rate limit.
+        # If the cache covers what we need, return that and warn loudly;
+        # otherwise we have nothing to give the caller.
+        if cache_path.exists():
+            cached = pd.read_parquet(cache_path)
+            d = cached.index.get_level_values("date")
+            t = cached.index.get_level_values("ticker")
+            mask = (d >= start_ts) & (d <= end_ts) & t.isin(requested)
+            if mask.any():
+                print(
+                    f"[load_yfinance] WARN: fresh fetch returned 0 rows "
+                    f"(Yahoo rate limit?). Returning cached subset of "
+                    f"{int(mask.sum()):,} rows instead. Retry later for a "
+                    f"complete refresh."
+                )
+                return cached.loc[mask].sort_index()
+        raise RuntimeError(
+            f"[load_yfinance] no data returned for any of {len(requested)} "
+            f"tickers, and the cache cannot fill the gap. Likely Yahoo "
+            f"rate limit -- wait a few minutes and retry."
+        )
+
+    fresh = pd.concat(frames).sort_index()
+
+    # Merge with existing cache to grow the union, then persist.
+    if not force_rebuild and cache_path.exists():
+        cached = pd.read_parquet(cache_path)
+        merged = pd.concat([cached, fresh])
+        merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+    else:
+        merged = fresh
+
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    merged.to_parquet(cache_path, compression="snappy")
+    size_kb = cache_path.stat().st_size / 1024
+    print(
+        f"[load_yfinance] cached {len(merged):,} rows total ({size_kb:.1f} KB)"
+    )
+
+    d = merged.index.get_level_values("date")
+    t = merged.index.get_level_values("ticker")
+    mask = (d >= start_ts) & (d <= end_ts) & t.isin(requested)
+    return merged.loc[mask].sort_index()
+
+
 def _load_macro_raw(
     series_ids: tuple[str, ...],
     *,
@@ -423,6 +672,368 @@ def load_macro(
     return df
 
 
+def _sp500_union_in_window(start: str, end: str) -> tuple[str, ...]:
+    """Return every ticker that was S&P 500 at any point in ``[start, end]``.
+
+    A membership spell ``[s, e]`` (with ``e = NaT`` meaning "still active")
+    overlaps the window iff ``s <= end`` AND (``e`` is open OR ``e >= start``).
+    Used by :func:`load_prices_yfinance` to decide which tickers to fetch.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted, de-duplicated. Empty if the window is entirely before the
+        first recorded membership.
+    """
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+    table = _load_membership_table()
+    overlaps = (
+        (table["start_date"] <= end_ts)
+        & (table["end_date"].isna() | (table["end_date"] >= start_ts))
+    )
+    return tuple(sorted(table.loc[overlaps, "ticker"].unique()))
+
+
+def load_prices_yfinance(
+    *,
+    start: str,
+    end: str,
+    universe: tuple[str, ...] | list[str] | None = None,
+    force_rebuild: bool = False,
+) -> pd.DataFrame:
+    """Load monthly stock prices from yfinance, restricted to an S&P 500 universe.
+
+    Public-API wrapper around :func:`_load_yfinance_monthly_raw` that picks
+    a sensible default universe: every ticker that was an S&P 500 member at
+    any point in ``[start, end]`` (call it the "S&P 500 union"). This
+    over-fetches relative to a strict point-in-time filter, but is cached
+    once and lets downstream code apply :func:`load_sp500_membership` at
+    each rebalance date for true PIT filtering.
+
+    Parameters
+    ----------
+    start : str
+        Inclusive start date (ISO).
+    end : str
+        Inclusive end date (ISO).
+    universe : tuple[str, ...] or list[str], optional
+        Explicit ticker list. ``None`` (default) computes the S&P 500 union
+        over the window.
+    force_rebuild : bool, keyword-only, default False
+        Bypass the cache and re-download.
+
+    Returns
+    -------
+    pd.DataFrame
+        Long-format frame indexed by ``(date, ticker)`` MultiIndex. Columns
+        as in :func:`_load_yfinance_monthly_raw` (open, high, low,
+        adj_close, volume, ret).
+
+        Note the identifier is ``ticker`` (str), NOT ``permno`` (int) --
+        yfinance has no PERMNO concept. The splice function in a future PR
+        will bridge the two ID spaces.
+
+    Notes
+    -----
+    * yfinance silently drops tickers with no data (delisted before
+      ``start``, never existed, name changes Yahoo no longer maps).
+      The returned frame's ticker set may therefore be smaller than the
+      requested universe; compare ``df.index.get_level_values('ticker').unique()``
+      against the requested list to spot drops.
+    * For the 2023+ splice use case the default universe is correct: it
+      includes every ticker that touched the index, regardless of when it
+      joined or left, so PIT filtering downstream is always feasible.
+    """
+    if universe is None:
+        tickers = _sp500_union_in_window(start, end)
+        print(
+            f"[load_prices_yfinance] S&P 500 union over "
+            f"{start} -> {end}: {len(tickers)} tickers"
+        )
+    else:
+        tickers = tuple(universe)
+
+    if not tickers:
+        raise ValueError(
+            f"Empty universe for window {start} -> {end}. "
+            f"Check that download_sp500_universe() has run."
+        )
+
+    return _load_yfinance_monthly_raw(
+        tickers, start=start, end=end, force_rebuild=force_rebuild
+    )
+
+
+def load_prices_spliced(
+    *,
+    start: str,
+    end: str,
+    force_rebuild: bool = False,
+) -> pd.DataFrame:
+    """Splice CRSP (<= 2022-12) + yfinance (>= 2023-01) into one return panel.
+
+    The Project Framework's test window is 2019-2024 but the school's CRSP
+    licence only covers through 2022-12-30. This loader fills the gap from
+    yfinance so a single backtest can span the full window. Validation that
+    the splice is safe lives in
+    ``notebooks/persona/yfinance_overlap_check.py`` (must be green before
+    trusting any result from this function).
+
+    Splice mechanics
+    ----------------
+    Both halves canonicalise the asset identifier to **ticker** (not PERMNO),
+    because yfinance has no PERMNO. To handle CRSP-era ticker renames
+    (FB -> META, SQ -> XYZ), each CRSP PERMNO is collapsed to its
+    most-recent in-window ticker, so a single company's history is
+    contiguous across the splice. For example::
+
+        PERMNO 13407 had ticker "FB"   in 2020-2022-06
+                      then ticker "META" in 2022-07-2022-12
+
+        After splice, all of 13407's rows appear under ticker "META",
+        and the 2023+ yfinance "META" rows concatenate seamlessly.
+
+    Parameters
+    ----------
+    start : str
+        Inclusive start (ISO).
+    end : str
+        Inclusive end (ISO). If beyond 2022-12-30, yfinance fills the gap.
+    force_rebuild : bool, keyword-only, default False
+        Pass-through to the yfinance loader.
+
+    Returns
+    -------
+    pd.DataFrame
+        Long-format with ``(date, ticker)`` MultiIndex. Columns:
+
+        =========  ===============================================
+        Column     Description
+        =========  ===============================================
+        ret        Monthly total return (CRSP ret or yfinance pct
+                   change of auto-adjusted close)
+        source     "crsp" or "yfinance" -- splice provenance
+        =========  ===============================================
+
+        Other CRSP columns (market_cap, sic_code, ...) are NOT included
+        because yfinance cannot match them. If you need those, call
+        :func:`load_prices` directly for the CRSP-era subset.
+
+    Notes
+    -----
+    * Tickers that delisted before the splice and that yfinance no longer
+      recognises (e.g. SIVB, VAR, WRK) have their history end at the
+      CRSP cutoff -- no yfinance continuation, no warning. The downstream
+      backtest's NaN-handling skips them automatically.
+    * If multiple PERMNOs collapse onto the same canonical ticker
+      (rare: usually means the ticker was reused), the first PERMNO seen
+      wins and a warning is printed.
+    """
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+    if start_ts > end_ts:
+        raise ValueError(f"start {start} is after end {end}")
+
+    parts: list[pd.DataFrame] = []
+
+    # ---- CRSP half ----------------------------------------------------
+    if start_ts <= CRSP_LAST_DATE:
+        crsp_end_ts = min(end_ts, CRSP_LAST_DATE)
+        crsp = load_prices(start=start, end=crsp_end_ts.strftime("%Y-%m-%d"))
+        members = set(_sp500_union_in_window(start, end))
+        crsp = crsp[crsp["ticker"].isin(members)]
+
+        # PERMNO -> most-recent ticker observed in the requested window.
+        permno_to_canon = (
+            crsp.reset_index()
+            .sort_values("date")
+            .groupby("permno")["ticker"]
+            .last()
+        )
+
+        crsp_long = crsp.reset_index().assign(
+            ticker=lambda d: d["permno"].map(permno_to_canon)
+        )
+
+        # Warn if a (date, canonical_ticker) cell holds rows from
+        # multiple PERMNOs -- only happens for ticker reuse, which is
+        # rare but worth flagging.
+        dup_check = crsp_long.groupby(["date", "ticker"])["permno"].nunique()
+        n_collisions = int((dup_check > 1).sum())
+        if n_collisions:
+            example_cells = dup_check[dup_check > 1].head(3)
+            print(
+                f"[load_prices_spliced] WARN: {n_collisions} "
+                f"(date, ticker) cells with multiple PERMNOs after "
+                f"canonicalisation (likely ticker reuse). Examples:\n"
+                f"{example_cells}"
+            )
+
+        crsp_long = (
+            crsp_long.groupby(["date", "ticker"])["ret"]
+            .first()
+            .to_frame("ret")
+            .assign(source="crsp")
+        )
+        parts.append(crsp_long)
+        print(
+            f"[load_prices_spliced] CRSP half: "
+            f"{len(crsp_long):,} rows, "
+            f"{crsp_long.index.get_level_values('ticker').nunique()} tickers, "
+            f"{crsp_long.index.get_level_values('date').min().date()} -> "
+            f"{crsp_long.index.get_level_values('date').max().date()}"
+        )
+
+    # ---- yfinance half -----------------------------------------------
+    if end_ts > CRSP_LAST_DATE:
+        # Start yfinance the day after CRSP ends, or the requested start
+        # if it's later.
+        yf_start_ts = max(start_ts, CRSP_LAST_DATE + pd.Timedelta(days=1))
+        # Fetch ONE EXTRA month before yf_start so the first month's `ret`
+        # is computable (pct_change needs a prior price). The buffer row's
+        # own ret is NaN; we drop it before splicing.
+        yf_buffer_ts = (yf_start_ts - pd.DateOffset(months=1)).replace(day=1)
+        yf = load_prices_yfinance(
+            start=yf_buffer_ts.strftime("%Y-%m-%d"),
+            end=end_ts.strftime("%Y-%m-%d"),
+            force_rebuild=force_rebuild,
+        )
+        yf = yf[yf.index.get_level_values("date") >= yf_start_ts]
+        yf_long = yf[["ret"]].assign(source="yfinance")
+        parts.append(yf_long)
+        print(
+            f"[load_prices_spliced] yfinance half: "
+            f"{len(yf_long):,} rows, "
+            f"{yf_long.index.get_level_values('ticker').nunique()} tickers, "
+            f"{yf_long.index.get_level_values('date').min().date()} -> "
+            f"{yf_long.index.get_level_values('date').max().date()}"
+        )
+
+    if not parts:
+        raise ValueError(
+            f"Empty splice for window {start} -> {end} (nothing on either side)"
+        )
+
+    return pd.concat(parts).sort_index()
+
+
+def compare_crsp_vs_yfinance(
+    *,
+    start: str = "2018-01-01",
+    end: str = "2022-12-31",
+    sample_size: int | None = 50,
+    random_state: int = 42,
+) -> pd.DataFrame:
+    """Cross-validate CRSP returns against yfinance over an overlap window.
+
+    Both sources are supposed to give the same monthly total return for the
+    same company on the same month. If they don't, splicing them into one
+    time series is unsafe -- a model trained on CRSP-era returns will see
+    a sudden regime shift at the splice point that has nothing to do with
+    the market.
+
+    Method:
+        1. Pull CRSP for [start, end] and restrict to PERMNOs that were
+           S&P 500 members at some point in the window.
+        2. For each PERMNO, find its most-recent in-window CRSP ticker --
+           this is the ticker yfinance is most likely to recognise, since
+           Yahoo retrofits ticker changes (FB -> META) but doesn't preserve
+           the old symbol.
+        3. Pull yfinance for that ticker set.
+        4. Per-ticker, compute Pearson correlation and mean / max absolute
+           difference of monthly returns over the joint sample.
+
+    Parameters
+    ----------
+    start, end : str, optional
+        Overlap window. Default 2018-2022 (CRSP ends 2022-12-30).
+    sample_size : int, optional
+        Number of PERMNOs to subsample (deterministic via ``random_state``).
+        ``None`` = all (slow: 500+ tickers, several minutes). Default 50.
+    random_state : int
+        Seeds the subsample for reproducibility.
+
+    Returns
+    -------
+    pd.DataFrame
+        Indexed by ticker, sorted ascending by correlation (worst at top).
+        Columns: ``n_months``, ``correlation``, ``mean_abs_diff_bps``,
+        ``max_abs_diff_bps``.
+
+        Healthy splice expectations (per Project Framework spirit):
+            * Median correlation should be > 0.99.
+            * Median mean_abs_diff_bps should be < 10 (1 bp = 0.01%).
+            * Outliers (correlation < 0.9 or max_abs_diff > 500 bps) almost
+              always indicate ticker reuse or a yfinance backfill error;
+              inspect by ticker before trusting the splice.
+    """
+    crsp = load_prices(start=start, end=end).copy()
+    members = set(_sp500_union_in_window(start, end))
+    crsp = crsp[crsp["ticker"].isin(members)]
+
+    permno_to_latest = (
+        crsp.reset_index()
+        .sort_values("date")
+        .groupby("permno")["ticker"]
+        .last()
+        .dropna()
+    )
+    print(
+        f"[compare] {len(permno_to_latest)} unique PERMNOs in CRSP that were "
+        f"S&P 500 members at some point in {start} -> {end}"
+    )
+
+    if sample_size is not None and len(permno_to_latest) > sample_size:
+        permno_to_latest = permno_to_latest.sample(
+            n=sample_size, random_state=random_state
+        )
+        print(
+            f"[compare] subsampling {sample_size} PERMNOs "
+            f"(random_state={random_state})"
+        )
+
+    yf_tickers = tuple(sorted(set(permno_to_latest.values)))
+    yf = _load_yfinance_monthly_raw(yf_tickers, start=start, end=end)
+
+    crsp_sample = (
+        crsp[
+            crsp.index.get_level_values("permno").isin(permno_to_latest.index)
+        ].reset_index()
+    )
+    crsp_sample["latest_ticker"] = crsp_sample["permno"].map(permno_to_latest)
+    crsp_ret = (
+        crsp_sample.groupby(["date", "latest_ticker"])["ret"]
+        .last()
+        .unstack("latest_ticker")
+    )
+    yf_ret = yf["ret"].unstack("ticker")
+
+    common = sorted(set(crsp_ret.columns) & set(yf_ret.columns))
+    rows = []
+    for tkr in common:
+        joint = pd.concat(
+            [crsp_ret[tkr].rename("crsp"), yf_ret[tkr].rename("yf")],
+            axis=1,
+        ).dropna()
+        if len(joint) < 6:
+            continue
+        diff = joint["crsp"] - joint["yf"]
+        rows.append(
+            {
+                "ticker": tkr,
+                "n_months": len(joint),
+                "correlation": joint["crsp"].corr(joint["yf"]),
+                "mean_abs_diff_bps": float(diff.abs().mean() * 1e4),
+                "max_abs_diff_bps": float(diff.abs().max() * 1e4),
+            }
+        )
+
+    return (
+        pd.DataFrame(rows).set_index("ticker").sort_values("correlation")
+    )
+
+
 def load_sp500_membership(asof: str) -> list[str]:
     """Return the S&P 500 constituent tickers as of a given date.
 
@@ -508,6 +1119,109 @@ if __name__ == "__main__":
         print(f"  Last available month: {last_date}, monthly return: {last_ret:.2%}")
     else:
         print("  LEH not found - data integrity bug?")
+
+    # ---- yfinance monthly prices ----
+    print()
+    print("=" * 70)
+    print("yfinance monthly smoke test (5 large-caps, 2023)")
+    print("=" * 70)
+    yf_tickers = ("AAPL", "MSFT", "GOOG", "JPM", "XOM")
+    # Pull 2022-12 too so first 2023 return is non-NaN.
+    yf_df = _load_yfinance_monthly_raw(
+        yf_tickers, start="2022-12-01", end="2023-12-31"
+    )
+    print()
+    print(f"Shape: {yf_df.shape[0]:,} rows x {yf_df.shape[1]} cols")
+    print(
+        f"Date range: {yf_df.index.get_level_values('date').min().date()} -> "
+        f"{yf_df.index.get_level_values('date').max().date()}"
+    )
+    print(
+        f"Tickers returned: "
+        f"{sorted(yf_df.index.get_level_values('ticker').unique())}"
+    )
+    print()
+    # Sanity: 2023 was a strong year for big tech. AAPL ~+49%, MSFT ~+58%,
+    # GOOG ~+58%; JPM ~+27%; XOM only ~-2% (oil pulled back). If these are
+    # wildly off, something's wrong with the adj_close / return chain.
+    print("2023 cumulative total return (Jan -> Dec, 12 months):")
+    for tkr in yf_tickers:
+        sub = yf_df.xs(tkr, level="ticker")
+        rets_2023 = sub.loc["2023-01-01":"2023-12-31", "ret"].dropna()
+        if len(rets_2023) < 12:
+            print(f"  {tkr}: only {len(rets_2023)} return observations -- check?")
+            continue
+        cum = (1 + rets_2023).prod() - 1
+        print(f"  {tkr}: {cum:+.1%} (over {len(rets_2023)} months)")
+
+    # Second call must be a cache hit (no network).
+    print()
+    print("Cache-hit check (second call should print 'cache hit'):")
+    _ = _load_yfinance_monthly_raw(
+        yf_tickers, start="2022-12-01", end="2023-12-31"
+    )
+
+    # ---- yfinance public loader + S&P 500 universe wiring ----
+    print()
+    print("=" * 70)
+    print("load_prices_yfinance smoke test (universe wiring)")
+    print("=" * 70)
+
+    # Step 1: universe lookup only (no download). Should be ~500-600 names
+    # over a 2-year window once index churn is counted in.
+    for win in [("2024-01-01", "2024-12-31"), ("2023-01-01", "2024-12-31")]:
+        uni = _sp500_union_in_window(*win)
+        print(
+            f"  S&P 500 union {win[0]} -> {win[1]}: "
+            f"{len(uni)} unique tickers (first 5: {sorted(uni)[:5]})"
+        )
+
+    # Step 2: end-to-end via the public function with an EXPLICIT small
+    # universe (so we don't burn the network on 500 tickers in a smoke test).
+    print()
+    print("Public API end-to-end (explicit 3-ticker universe, 2024 Q4):")
+    df_q4 = load_prices_yfinance(
+        start="2024-09-01", end="2024-12-31",
+        universe=("NVDA", "TSLA", "META"),
+    )
+    print(
+        f"  Returned: {df_q4.shape[0]} rows, "
+        f"{df_q4.index.get_level_values('ticker').nunique()} tickers, "
+        f"{df_q4.index.get_level_values('date').nunique()} months"
+    )
+    print(f"  Index names: {df_q4.index.names}")
+    print(f"  Columns: {list(df_q4.columns)}")
+
+    # ---- CRSP + yfinance splice ----
+    print()
+    print("=" * 70)
+    print("load_prices_spliced smoke test (Sep 2022 - Jun 2023)")
+    print("=" * 70)
+    spliced = load_prices_spliced(start="2022-09-01", end="2023-06-30")
+    print()
+    print(
+        f"Total: {spliced.shape[0]:,} rows, "
+        f"{spliced.index.get_level_values('ticker').nunique()} tickers"
+    )
+    src_counts = spliced.groupby("source").size().to_dict()
+    print(f"Source counts: {src_counts}")
+    print()
+    # Continuity check on AAPL: 2022-12 should be CRSP, 2023-01 should
+    # be yfinance with a valid (non-NaN) return.
+    aapl = spliced.xs("AAPL", level="ticker").sort_index()
+    boundary = aapl.loc["2022-12-01":"2023-02-28"]
+    print("AAPL across splice boundary:")
+    print(boundary.to_string())
+    nan_at_jan = pd.isna(aapl.loc["2023-01-31", "ret"])
+    if nan_at_jan:
+        print(
+            "  WARN: Jan 2023 ret is NaN -- buffer-month fetch may not "
+            "be working."
+        )
+    else:
+        print(
+            "  Jan 2023 ret is non-NaN -- buffer-month fetch is wired correctly."
+        )
 
     # ---- FRED macro features ----
     print()
