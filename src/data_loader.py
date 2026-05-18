@@ -618,6 +618,99 @@ def load_macro(
     return df
 
 
+def _sp500_union_in_window(start: str, end: str) -> tuple[str, ...]:
+    """Return every ticker that was S&P 500 at any point in ``[start, end]``.
+
+    A membership spell ``[s, e]`` (with ``e = NaT`` meaning "still active")
+    overlaps the window iff ``s <= end`` AND (``e`` is open OR ``e >= start``).
+    Used by :func:`load_prices_yfinance` to decide which tickers to fetch.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted, de-duplicated. Empty if the window is entirely before the
+        first recorded membership.
+    """
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+    table = _load_membership_table()
+    overlaps = (
+        (table["start_date"] <= end_ts)
+        & (table["end_date"].isna() | (table["end_date"] >= start_ts))
+    )
+    return tuple(sorted(table.loc[overlaps, "ticker"].unique()))
+
+
+def load_prices_yfinance(
+    *,
+    start: str,
+    end: str,
+    universe: tuple[str, ...] | list[str] | None = None,
+    force_rebuild: bool = False,
+) -> pd.DataFrame:
+    """Load monthly stock prices from yfinance, restricted to an S&P 500 universe.
+
+    Public-API wrapper around :func:`_load_yfinance_monthly_raw` that picks
+    a sensible default universe: every ticker that was an S&P 500 member at
+    any point in ``[start, end]`` (call it the "S&P 500 union"). This
+    over-fetches relative to a strict point-in-time filter, but is cached
+    once and lets downstream code apply :func:`load_sp500_membership` at
+    each rebalance date for true PIT filtering.
+
+    Parameters
+    ----------
+    start : str
+        Inclusive start date (ISO).
+    end : str
+        Inclusive end date (ISO).
+    universe : tuple[str, ...] or list[str], optional
+        Explicit ticker list. ``None`` (default) computes the S&P 500 union
+        over the window.
+    force_rebuild : bool, keyword-only, default False
+        Bypass the cache and re-download.
+
+    Returns
+    -------
+    pd.DataFrame
+        Long-format frame indexed by ``(date, ticker)`` MultiIndex. Columns
+        as in :func:`_load_yfinance_monthly_raw` (open, high, low,
+        adj_close, volume, ret).
+
+        Note the identifier is ``ticker`` (str), NOT ``permno`` (int) --
+        yfinance has no PERMNO concept. The splice function in a future PR
+        will bridge the two ID spaces.
+
+    Notes
+    -----
+    * yfinance silently drops tickers with no data (delisted before
+      ``start``, never existed, name changes Yahoo no longer maps).
+      The returned frame's ticker set may therefore be smaller than the
+      requested universe; compare ``df.index.get_level_values('ticker').unique()``
+      against the requested list to spot drops.
+    * For the 2023+ splice use case the default universe is correct: it
+      includes every ticker that touched the index, regardless of when it
+      joined or left, so PIT filtering downstream is always feasible.
+    """
+    if universe is None:
+        tickers = _sp500_union_in_window(start, end)
+        print(
+            f"[load_prices_yfinance] S&P 500 union over "
+            f"{start} -> {end}: {len(tickers)} tickers"
+        )
+    else:
+        tickers = tuple(universe)
+
+    if not tickers:
+        raise ValueError(
+            f"Empty universe for window {start} -> {end}. "
+            f"Check that download_sp500_universe() has run."
+        )
+
+    return _load_yfinance_monthly_raw(
+        tickers, start=start, end=end, force_rebuild=force_rebuild
+    )
+
+
 def load_sp500_membership(asof: str) -> list[str]:
     """Return the S&P 500 constituent tickers as of a given date.
 
@@ -744,6 +837,37 @@ if __name__ == "__main__":
     _ = _load_yfinance_monthly_raw(
         yf_tickers, start="2022-12-01", end="2023-12-31"
     )
+
+    # ---- yfinance public loader + S&P 500 universe wiring ----
+    print()
+    print("=" * 70)
+    print("load_prices_yfinance smoke test (universe wiring)")
+    print("=" * 70)
+
+    # Step 1: universe lookup only (no download). Should be ~500-600 names
+    # over a 2-year window once index churn is counted in.
+    for win in [("2024-01-01", "2024-12-31"), ("2023-01-01", "2024-12-31")]:
+        uni = _sp500_union_in_window(*win)
+        print(
+            f"  S&P 500 union {win[0]} -> {win[1]}: "
+            f"{len(uni)} unique tickers (first 5: {sorted(uni)[:5]})"
+        )
+
+    # Step 2: end-to-end via the public function with an EXPLICIT small
+    # universe (so we don't burn the network on 500 tickers in a smoke test).
+    print()
+    print("Public API end-to-end (explicit 3-ticker universe, 2024 Q4):")
+    df_q4 = load_prices_yfinance(
+        start="2024-09-01", end="2024-12-31",
+        universe=("NVDA", "TSLA", "META"),
+    )
+    print(
+        f"  Returned: {df_q4.shape[0]} rows, "
+        f"{df_q4.index.get_level_values('ticker').nunique()} tickers, "
+        f"{df_q4.index.get_level_values('date').nunique()} months"
+    )
+    print(f"  Index names: {df_q4.index.names}")
+    print(f"  Columns: {list(df_q4.columns)}")
 
     # ---- FRED macro features ----
     print()
