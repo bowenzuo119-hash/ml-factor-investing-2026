@@ -7,11 +7,15 @@ here.
 
 Sources (see DECISIONS.md for the why):
     * Monthly equity prices and returns: CRSP MSF (vendor-provided CSV in
-      `data/raw/CRSPData_*.csv`), loaded via `load_prices`.
+      `data/raw/CRSPData_*.csv`), loaded via `load_prices`. Covers 1925-12
+      to 2022-12.
+    * Out-of-sample tail (2023-2024): yfinance, loaded via
+      `load_prices_yfinance`. Used to extend CRSP through the most recent
+      year for live-data evaluation; school has no ongoing CRSP licence.
     * S&P 500 historical membership: fja05680/sp500 GitHub CSVs, loaded via
       `load_sp500_membership`.
-    * Macro / regime features: FRED via `pandas-datareader` (TODO,
-      `load_macro`).
+    * Macro / regime features: FRED via `pandas-datareader`, loaded via
+      `load_macro`.
 
 Design principles:
     * Read each raw source at most once; persist a cleaned version to
@@ -47,6 +51,12 @@ SP500_CURRENT_FILE = "sp500.csv"
 # 2022-12, all US listed common stocks (~37k unique PERMNOs).
 CRSP_MONTHLY_FILE = "CRSPData_1925_2022.csv"
 CRSP_MONTHLY_CACHE = "crsp_monthly.parquet"
+
+# yfinance cache: union of all (ticker, month) ever fetched. Lets the loader
+# serve overlapping requests (e.g. two backtests with different date windows
+# on the same universe) without re-hitting the network. See
+# `_load_yfinance_monthly_raw` for the cache hit/miss rules.
+YFINANCE_MONTHLY_CACHE = "yfinance_monthly.parquet"
 
 # FRED macro series for Person C's regime model. Picked per Project
 # Framework §4.4 ("Macro for Person C: VIX, DGS10, DGS2, DBAA, DAAA, DFF").
@@ -295,6 +305,191 @@ def load_prices(
     return df.loc[(slice(start_ts, end_ts), slice(None)), :]
 
 
+def _load_yfinance_monthly_raw(
+    tickers: tuple[str, ...] | list[str],
+    *,
+    start: str,
+    end: str,
+    force_rebuild: bool = False,
+) -> pd.DataFrame:
+    """Download daily OHLCV from yfinance, resample to month-end, cache to parquet.
+
+    yfinance is the project's fallback price source for 2023+ since the
+    school has no ongoing CRSP licence (DECISIONS 2026-05-18 'School has no
+    CRSP — yfinance for 2023+'). This loader is schema-compatible with the
+    CRSP loader so the two can be spliced:
+
+        * Same MultiIndex layout (date, identifier) -- here ``ticker`` not
+          ``permno`` because yfinance has no PERMNO concept.
+        * Same monthly ``ret`` column, computed from auto-adjusted close
+          (splits AND dividends adjusted, so equivalent to CRSP's total
+          return).
+        * Same month-end date convention (last available trading day of
+          the month).
+
+    Cache strategy: store union of all (ticker, date) ever fetched in one
+    parquet. A cache HIT happens when (a) every requested ticker is in the
+    cache AND (b) the cached date range fully covers the request. Otherwise
+    the full request is re-fetched and merged in. Costs bandwidth on the
+    first call but is essentially free thereafter.
+
+    Parameters
+    ----------
+    tickers : tuple[str, ...] or list[str]
+        Yahoo ticker symbols (e.g. ``["AAPL", "MSFT"]``). Order does not
+        matter; symbols are uppercased and de-duplicated. Output is sorted
+        by (date, ticker).
+    start : str
+        Inclusive start date (ISO).
+    end : str
+        Inclusive end date (ISO). yfinance's own ``end`` is exclusive; this
+        loader bumps it by one day so the user-facing semantics match the
+        rest of this module.
+    force_rebuild : bool, keyword-only, default False
+        Bypass the cache and re-download.
+
+    Returns
+    -------
+    pd.DataFrame
+        Long-format frame indexed by ``(date, ticker)`` MultiIndex with
+        columns:
+
+        =========== =================================================
+        Column      Description
+        =========== =================================================
+        open        Month-end-day's open price (USD, split-adjusted)
+        high        Month-end-day's high
+        low         Month-end-day's low
+        adj_close   Month-end-day's adjusted close (splits + divs)
+        volume      Month-end-day's volume (shares)
+        ret         Monthly total return derived from adj_close
+        =========== =================================================
+
+    Notes
+    -----
+    * The first month of any ticker's data has ``ret == NaN`` (no prior
+      month to diff against). Downstream code should ``.dropna()`` or be
+      tolerant; subsequent calls that extend the cache backward will fill
+      in the missing return.
+    * Tickers that return no data (delisted before ``start``, never existed,
+      Yahoo outage) are logged and silently skipped. Caller must check
+      ``df.index.get_level_values("ticker").unique()`` against what they
+      asked for.
+    """
+    cache_path = PROCESSED_DIR / YFINANCE_MONTHLY_CACHE
+    requested = tuple(sorted({str(t).strip().upper() for t in tickers}))
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+
+    # --- Cache hit path -------------------------------------------------
+    # Compare in month-end space: a request for [2022-12-01, 2023-12-31]
+    # actually wants month-ends 2022-12-31 ... 2023-12-31, so cache that
+    # spans those month-ends is a hit even if the literal `start_ts` falls
+    # before any cached date.
+    expected_months = pd.date_range(start_ts, end_ts, freq="ME")
+    if not force_rebuild and cache_path.exists() and len(expected_months) > 0:
+        cached = pd.read_parquet(cache_path)
+        cached_tickers = set(cached.index.get_level_values("ticker"))
+        cached_dates = cached.index.get_level_values("date")
+        needed_min, needed_max = expected_months[0], expected_months[-1]
+        if (
+            set(requested).issubset(cached_tickers)
+            and cached_dates.min() <= needed_min
+            and cached_dates.max() >= needed_max
+        ):
+            print(
+                f"[load_yfinance] cache hit: {len(requested)} tickers, "
+                f"{start_ts.date()} -> {end_ts.date()}"
+            )
+            d = cached.index.get_level_values("date")
+            t = cached.index.get_level_values("ticker")
+            mask = (d >= start_ts) & (d <= end_ts) & t.isin(requested)
+            return cached.loc[mask].sort_index()
+
+    # --- Cache miss: fetch from Yahoo -----------------------------------
+    import yfinance as yf
+
+    # yfinance's `end` is exclusive; bump by 1 day for inclusive semantics.
+    yf_end = (end_ts + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+    print(
+        f"[load_yfinance] downloading {len(requested)} tickers "
+        f"({start_ts.date()} -> {end_ts.date()})..."
+    )
+    raw = yf.download(
+        tickers=list(requested),
+        start=start,
+        end=yf_end,
+        interval="1d",
+        auto_adjust=True,    # Close column = split+dividend adjusted
+        progress=False,
+        threads=True,
+        group_by="ticker",
+    )
+
+    # Column layout depends on ticker count:
+    #   * len > 1  -> MultiIndex (ticker, field)
+    #   * len == 1 -> flat columns; wrap to look the same.
+    if isinstance(raw.columns, pd.MultiIndex):
+        per_ticker = {
+            t: raw[t]
+            for t in requested
+            if t in raw.columns.get_level_values(0)
+        }
+    else:
+        per_ticker = {requested[0]: raw}
+
+    frames: list[pd.DataFrame] = []
+    for tkr, sub in per_ticker.items():
+        if sub.empty or sub["Close"].dropna().empty:
+            print(f"[load_yfinance] no data: {tkr}")
+            continue
+        # Resample daily -> month-end: take the last trading day's row.
+        monthly = sub.resample("ME").last()
+        monthly["ret"] = monthly["Close"].pct_change()
+        monthly = monthly.rename(
+            columns={
+                "Open": "open", "High": "high", "Low": "low",
+                "Close": "adj_close", "Volume": "volume",
+            }
+        )
+        monthly["ticker"] = tkr
+        monthly.index.name = "date"
+        frames.append(
+            monthly.reset_index()
+            .set_index(["date", "ticker"])
+            [["open", "high", "low", "adj_close", "volume", "ret"]]
+        )
+
+    if not frames:
+        raise RuntimeError(
+            f"[load_yfinance] no data returned for any of {len(requested)} "
+            f"tickers. Check tickers and network."
+        )
+
+    fresh = pd.concat(frames).sort_index()
+
+    # Merge with existing cache to grow the union, then persist.
+    if not force_rebuild and cache_path.exists():
+        cached = pd.read_parquet(cache_path)
+        merged = pd.concat([cached, fresh])
+        merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+    else:
+        merged = fresh
+
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    merged.to_parquet(cache_path, compression="snappy")
+    size_kb = cache_path.stat().st_size / 1024
+    print(
+        f"[load_yfinance] cached {len(merged):,} rows total ({size_kb:.1f} KB)"
+    )
+
+    d = merged.index.get_level_values("date")
+    t = merged.index.get_level_values("ticker")
+    mask = (d >= start_ts) & (d <= end_ts) & t.isin(requested)
+    return merged.loc[mask].sort_index()
+
+
 def _load_macro_raw(
     series_ids: tuple[str, ...],
     *,
@@ -508,6 +703,47 @@ if __name__ == "__main__":
         print(f"  Last available month: {last_date}, monthly return: {last_ret:.2%}")
     else:
         print("  LEH not found - data integrity bug?")
+
+    # ---- yfinance monthly prices ----
+    print()
+    print("=" * 70)
+    print("yfinance monthly smoke test (5 large-caps, 2023)")
+    print("=" * 70)
+    yf_tickers = ("AAPL", "MSFT", "GOOG", "JPM", "XOM")
+    # Pull 2022-12 too so first 2023 return is non-NaN.
+    yf_df = _load_yfinance_monthly_raw(
+        yf_tickers, start="2022-12-01", end="2023-12-31"
+    )
+    print()
+    print(f"Shape: {yf_df.shape[0]:,} rows x {yf_df.shape[1]} cols")
+    print(
+        f"Date range: {yf_df.index.get_level_values('date').min().date()} -> "
+        f"{yf_df.index.get_level_values('date').max().date()}"
+    )
+    print(
+        f"Tickers returned: "
+        f"{sorted(yf_df.index.get_level_values('ticker').unique())}"
+    )
+    print()
+    # Sanity: 2023 was a strong year for big tech. AAPL ~+49%, MSFT ~+58%,
+    # GOOG ~+58%; JPM ~+27%; XOM only ~-2% (oil pulled back). If these are
+    # wildly off, something's wrong with the adj_close / return chain.
+    print("2023 cumulative total return (Jan -> Dec, 12 months):")
+    for tkr in yf_tickers:
+        sub = yf_df.xs(tkr, level="ticker")
+        rets_2023 = sub.loc["2023-01-01":"2023-12-31", "ret"].dropna()
+        if len(rets_2023) < 12:
+            print(f"  {tkr}: only {len(rets_2023)} return observations -- check?")
+            continue
+        cum = (1 + rets_2023).prod() - 1
+        print(f"  {tkr}: {cum:+.1%} (over {len(rets_2023)} months)")
+
+    # Second call must be a cache hit (no network).
+    print()
+    print("Cache-hit check (second call should print 'cache hit'):")
+    _ = _load_yfinance_monthly_raw(
+        yf_tickers, start="2022-12-01", end="2023-12-31"
+    )
 
     # ---- FRED macro features ----
     print()
