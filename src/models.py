@@ -206,11 +206,22 @@ class XGBoostModel:
 
     Parameters
     ----------
-    n_estimators : int, default 300
+    n_estimators : int, default 150
+        Phase-3 Optuna optimum. Half the textbook default (300); the
+        tuner converged on a smaller-but-more-regularised forest.
     max_depth : int, default 4
-    learning_rate : float, default 0.05
-    subsample : float, default 0.8
-    colsample_bytree : float, default 0.8
+    learning_rate : float, default 0.015
+        Phase-3 optimum. Slow learning rate; lets the regularisation work.
+    subsample : float, default 0.815
+    colsample_bytree : float, default 0.734
+    min_child_weight : int, default 15
+        Phase-3 optimum. Higher than the textbook default of 1; cuts
+        overfitting on small leaf subsamples.
+    reg_alpha : float, default 0.395
+        Phase-3 optimum. L1 regularisation on the leaf weights.
+    reg_lambda : float, default 2.852
+        Phase-3 optimum. L2 regularisation; tighter than the
+        textbook default of 1.0.
     random_state : int, default 42
     extra_kwargs : dict, optional
         Forwarded to ``xgboost.XGBRegressor``. Use for one-off tuning
@@ -223,15 +234,27 @@ class XGBoostModel:
 
     def __init__(
         self,
-        n_estimators: int = 300,
-        max_depth: int = 4,
-        learning_rate: float = 0.05,
-        subsample: float = 0.8,
-        colsample_bytree: float = 0.8,
+        n_estimators: int = 200,
+        max_depth: int = 3,
+        learning_rate: float = 0.0115,
+        subsample: float = 0.717,
+        colsample_bytree: float = 0.890,
+        min_child_weight: int = 11,
+        reg_alpha: float = 0.794,
+        reg_lambda: float = 2.305,
         random_state: int = 42,
         extra_kwargs: "dict[str, Any] | None" = None,
         target_kind: str = "raw",
     ) -> None:
+        # Defaults are the Phase-8 Optuna optimum on the 13-feature panel
+        # (validation window 2016-2018, objective: OOS R^2 vs zero).
+        # See results/03_xgboost_tuning/best_params.json. Pattern shifted vs
+        # the 8-feature tune: shallower trees (max_depth 4 -> 3), more
+        # aggressive L1 (reg_alpha 0.44 -> 0.79) so the model uses L1 for
+        # feature selection across the larger feature set; slightly less L2.
+        # Previous 8-feature defaults were: n_estimators=200, max_depth=4,
+        # learning_rate=0.0104, subsample=0.701, colsample_bytree=0.711,
+        # min_child_weight=14, reg_alpha=0.444, reg_lambda=3.144.
         import xgboost as xgb
 
         self.target_kind = _check_target_kind(target_kind)
@@ -241,6 +264,9 @@ class XGBoostModel:
             learning_rate=learning_rate,
             subsample=subsample,
             colsample_bytree=colsample_bytree,
+            min_child_weight=min_child_weight,
+            reg_alpha=reg_alpha,
+            reg_lambda=reg_lambda,
             tree_method="hist",
             random_state=random_state,
             n_jobs=1,  # safer on macOS; bump if training time becomes a bottleneck

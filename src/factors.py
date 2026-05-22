@@ -49,6 +49,7 @@ from src.data_loader import (
     SP500_CURRENT_FILE,
     compute_value_factors,
     download_sp500_universe,
+    load_dollar_volume_monthly,
     load_fundamentals,
     load_prices,
     load_prices_spliced,
@@ -404,8 +405,9 @@ def build_feature_panel(
     start: str = "2005-01-01",
     end: str = "2024-12-31",
     include: tuple[str, ...] = ("mom", "rev", "log_mktcap", "mvol", "ivol",
-                                "bm", "ep"),
+                                "bm", "ep", "dvol"),
     sector_rank: bool = True,
+    lag_months: tuple[int, ...] = (),
 ) -> pd.DataFrame:
     """Build the long-format feature panel the backtest engine expects.
 
@@ -511,6 +513,38 @@ def build_feature_panel(
                 .reindex(index=returns_wide.index, columns=returns_wide.columns)
             )
 
+    # Dollar volume (Feature 4) from Bowen's load_dollar_volume_monthly
+    # (yfinance daily close x volume, 21-day trailing mean, month-end).
+    # Use log_dollar_volume for ranking -- raw dollar volume is heavily
+    # right-skewed and the sector-relative rank step downstream wants
+    # roughly-symmetric input distributions for stable ranks.
+    if "dvol" in include:
+        dv = load_dollar_volume_monthly(
+            start=start, end=end,
+            universe=tuple(returns_wide.columns),
+        )
+        feature_wide["dvol"] = (
+            dv["log_dollar_volume"].unstack(level="ticker")
+            .reindex(index=returns_wide.index, columns=returns_wide.columns)
+        )
+
+    # Extended fundamentals (Phase 8): ROE, ROA, D/E, asset_growth, accruals.
+    # Sourced from Sharadar SF1 alongside the value factors -- one extra API
+    # call with broader cols, all cached.
+    EXTENDED_KEYS = ("roe", "roa", "de", "asset_growth", "accruals")
+    if any(k in include for k in EXTENDED_KEYS):
+        ext = load_extended_fundamentals_monthly(
+            start=start, end=end,
+            tickers=tuple(returns_wide.columns),
+            target_dates=returns_wide.index,
+        )
+        for k in EXTENDED_KEYS:
+            if k in include:
+                feature_wide[k] = (
+                    ext[k].unstack(level="ticker")
+                    .reindex(index=returns_wide.index, columns=returns_wide.columns)
+                )
+
     # 4. Stack to long format -----------------------------------------
     long_frames = []
     for name, wide in feature_wide.items():
@@ -538,6 +572,22 @@ def build_feature_panel(
     if sector_rank:
         panel = sector_relative_rank(panel, feature_cols=feature_cols)
 
+    # 6. Optional lag features (Framework §3.5) -----------------------
+    # For each requested lag k, add per-feature columns x_{t-k} per ticker
+    # so the model can pick up trajectory effects ("rising momentum"
+    # vs "falling momentum"). The lag operates on the post-rank panel so
+    # the lagged columns are also rank-shaped and don't need re-ranking.
+    if lag_months:
+        original_cols = list(feature_cols)
+        for k in lag_months:
+            lagged = (
+                panel[original_cols]
+                .groupby(level="ticker")
+                .shift(k)
+                .rename(columns={c: f"{c}_lag{k}" for c in original_cols})
+            )
+            panel = pd.concat([panel, lagged], axis=1)
+
     return panel
 
 
@@ -546,17 +596,18 @@ def build_feature_panel(
 # --------------------------------------------------------------------------
 
 def daily_dollar_volume(*args, **kwargs):  # noqa: ARG001
-    """BLOCKED. Person A's pipeline produces monthly data only.
+    """Deprecated. Use the ``"dvol"`` key in :func:`build_feature_panel`.
 
-    To implement feature #4 from the spec we would need either:
-      (a) Person A to add a daily-frequency loader (CRSP DSF or yfinance
-          daily), or
-      (b) A monthly proxy like price * shrout (= mktcap) which is just
-          feature #3 again, so not informative as a separate signal.
+    Was a NotImplementedError stub until 2026-05-22, when Person A added
+    ``data_loader.load_dollar_volume_monthly`` (yfinance daily close x
+    volume, 21-day trailing mean, sampled at month-end). The feature is
+    now wired into :func:`build_feature_panel` via the ``"dvol"`` key in
+    the default ``include`` tuple.
     """
     raise NotImplementedError(
-        "Daily dollar volume requires daily data, which the current pipeline "
-        "does not expose. See factors.py module docstring."
+        "daily_dollar_volume() is a deprecated stub. Call "
+        "build_feature_panel(..., include=(..., 'dvol')) instead, or "
+        "import data_loader.load_dollar_volume_monthly directly."
     )
 
 
@@ -674,6 +725,139 @@ def load_value_factors_monthly(
 
     out = target_grid.copy()
     for src, col in [(bm_long, "bm"), (ep_long, "ep_ttm")]:
+        merged = pd.merge_asof(
+            target_grid, src,
+            on="date", by="ticker",
+            direction="backward",
+            tolerance=pd.Timedelta(days=270),
+        )
+        out[col] = merged[col].to_numpy()
+
+    return out.set_index(["date", "ticker"]).sort_index()
+
+
+EXTENDED_SF1_COLS: tuple[str, ...] = (
+    "ticker", "datekey", "calendardate", "dimension",
+    "equity", "netinc", "marketcap",     # already used (B/M, E/P)
+    "assets", "roe", "roa", "de", "ncfo",  # new: quality + investment + accruals
+)
+
+
+def load_extended_fundamentals_monthly(
+    *,
+    start: str,
+    end: str,
+    tickers: tuple[str, ...] | list[str],
+    target_dates: pd.DatetimeIndex,
+) -> pd.DataFrame:
+    """Quality + investment + accruals features, forward-filled monthly.
+
+    Returns long-format ``(date, ticker)`` MultiIndex with five new columns:
+
+    * ``roe`` -- Sharadar's Return on Equity (ART), trailing 12 months.
+    * ``roa`` -- Sharadar's Return on Assets (ART), trailing 12 months.
+    * ``de``  -- Debt-to-Equity ratio (ARQ snapshot), Sharadar field.
+    * ``asset_growth`` -- year-over-year change in total assets,
+      ``assets_t / assets_{t-4_quarters} - 1`` from ARQ.
+    * ``accruals`` -- Sloan-style: ``(netinc_TTM - ncfo_TTM) / assets``
+      from ART. Captures earnings quality; high accruals = "earnings
+      not backed by cash flow" = empirically predictive of underperformance.
+
+    Forward-fill uses the same ``merge_asof(direction="backward")`` mechanism
+    as :func:`load_value_factors_monthly`, so the join is look-ahead-safe
+    (each (date, ticker) row carries the most recent ``datekey`` <= date,
+    with a 270-day tolerance).
+
+    First call to this function forces a Sharadar re-fetch with the
+    extended column set (so the per-dimension cache gains the new fields).
+    Subsequent calls hit the cache.
+    """
+    tickers_t = tuple(tickers)
+    buffer_start = (
+        pd.Timestamp(start) - pd.DateOffset(months=15)
+    ).strftime("%Y-%m-%d")
+
+    # Pull both dimensions with the extended cols. We no longer
+    # force_rebuild every call -- once the cache has been populated with
+    # the extended cols (the first call writes them in), subsequent
+    # callers can hit the cache cleanly. To re-pull, set force_rebuild
+    # via env var or upstream call.
+    print("[load_extended_fundamentals] pulling ARQ with extended cols...")
+    arq = load_fundamentals(
+        tickers=tickers_t, start=buffer_start, end=end,
+        dimension="ARQ", cols=EXTENDED_SF1_COLS,
+    )
+    print("[load_extended_fundamentals] pulling ART with extended cols...")
+    art = load_fundamentals(
+        tickers=tickers_t, start=buffer_start, end=end,
+        dimension="ART", cols=EXTENDED_SF1_COLS,
+    )
+
+    if arq.empty and art.empty:
+        return pd.DataFrame(
+            index=pd.MultiIndex.from_arrays([[], []], names=["date", "ticker"]),
+            columns=["roe", "roa", "de", "asset_growth", "accruals"],
+            dtype=float,
+        )
+
+    # Helper: turn a frame with (datekey, ticker) index + a value column
+    # into a flat (date, ticker, value) frame sorted by date, ready for
+    # merge_asof.
+    def _prep(df: pd.DataFrame, value_col: str) -> pd.DataFrame:
+        if value_col not in df.columns or df.empty:
+            return pd.DataFrame(columns=["date", "ticker", value_col])
+        out = (
+            df[[value_col]].dropna()
+            .reset_index()
+            .rename(columns={"datekey": "date"})
+            .drop_duplicates(subset=["date", "ticker"], keep="last")
+            .sort_values("date")
+        )
+        return out
+
+    # 1. ROE and ROA from ART (Sharadar reports them directly)
+    roe_prep = _prep(art, "roe")
+    roa_prep = _prep(art, "roa")
+
+    # 2. D/E from ARQ
+    de_prep = _prep(arq, "de")
+
+    # 3. Asset growth from ARQ: assets_t / assets_{t-4 quarters} - 1
+    arq_sorted = arq.dropna(subset=["assets"]).sort_index()
+    arq_sorted = arq_sorted.copy()
+    arq_sorted["assets_lag4"] = (
+        arq_sorted.groupby(level="ticker")["assets"].shift(4)
+    )
+    # Guard against zero/negative lagged assets
+    safe_lag = arq_sorted["assets_lag4"].where(arq_sorted["assets_lag4"] > 0)
+    arq_sorted["asset_growth"] = arq_sorted["assets"] / safe_lag - 1.0
+    ag_prep = _prep(arq_sorted, "asset_growth")
+
+    # 4. Accruals from ART: (netinc_TTM - ncfo_TTM) / assets
+    art_clean = art.dropna(subset=["netinc", "ncfo", "assets"]).sort_index().copy()
+    safe_assets = art_clean["assets"].where(art_clean["assets"] > 0)
+    art_clean["accruals"] = (art_clean["netinc"] - art_clean["ncfo"]) / safe_assets
+    acc_prep = _prep(art_clean, "accruals")
+
+    # Forward-fill onto target_dates via merge_asof, per-ticker.
+    target_grid = (
+        pd.MultiIndex.from_product(
+            [target_dates, tickers_t], names=["date", "ticker"]
+        )
+        .to_frame(index=False)
+        .sort_values("date")
+    )
+    out = target_grid.copy()
+    for src, col in [
+        (roe_prep, "roe"),
+        (roa_prep, "roa"),
+        (de_prep, "de"),
+        (ag_prep, "asset_growth"),
+        (acc_prep, "accruals"),
+    ]:
+        if src.empty:
+            out[col] = np.nan
+            continue
         merged = pd.merge_asof(
             target_grid, src,
             on="date", by="ticker",

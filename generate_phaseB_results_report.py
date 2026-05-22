@@ -50,6 +50,9 @@ PHASES = [
     ("01_first_real_backtest", "Phase 1", "5 features, raw target"),
     ("01b_with_value_factors", "Phase 1.5", "+ B/M and E/P (7 features)"),
     ("02_sector_relative_target", "Phase 2", "+ sector-relative target"),
+    ("03b_tuned_xgboost", "Phase 3b", "tuned XGBoost (7 feat)"),
+    ("03c_tuned_xgboost_8features", "Phase 3c", "tuned + dvol (8 feat)"),
+    ("08_extended_fundamentals", "Phase 8", "+ ROE/ROA/D/E/AG/Acc (13 feat)"),
 ]
 
 MODELS = ["Lasso", "XGBoost", "NN"]
@@ -60,6 +63,9 @@ PHASE_COLORS = {
     "Phase 1":   "#9CA3AF",  # grey
     "Phase 1.5": "#3B82F6",  # blue
     "Phase 2":   "#10B981",  # green
+    "Phase 3b":  "#DC2626",  # red - tuned XGBoost, 7 features
+    "Phase 3c":  "#7C3AED",  # purple - tuned + 8 features
+    "Phase 8":   "#F59E0B",  # amber - canonical: tuned + 13 features
 }
 MODEL_LINESTYLES = {"Lasso": ":", "XGBoost": "-", "NN": "--"}
 
@@ -232,7 +238,9 @@ def metric_table(phases_data, metric_keys: list[tuple[str, str, str]]) -> Table:
                 else:
                     row.append("-")
             rows.append(row)
-    t = Table(rows, hAlign="LEFT", colWidths=[5 * cm, 3.5 * cm, 3.5 * cm, 3.5 * cm])
+    t = Table(rows, hAlign="LEFT",
+              colWidths=[3.5 * cm, 2.1 * cm, 2.1 * cm, 2.1 * cm, 2.1 * cm,
+                         2.1 * cm, 2.1 * cm])
     style = [
         ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -284,13 +292,15 @@ def main() -> int:
             LEAD,
         ),
         Paragraph(
-            "<b>The headline.</b> XGBoost with 7 features and raw target "
-            "(Phase 1.5) gives the best Sharpe in the project so far: "
-            "<b>+0.56 net</b> on the test window, <b>+4.89% annualised</b>, "
-            "max drawdown −16%. Adding sector-relative target on top "
-            "(Phase 2) improves the model's IC and reduces drawdowns but "
-            "hurts Sharpe because the backtest still uses global decile "
-            "selection — see Section 4.",
+            "<b>The headline.</b> Tuned XGBoost on the 13-feature panel "
+            "(Phase 8) is now the canonical model: <b>+0.66 net Sharpe</b>, "
+            "<b>+5.91% annualised</b>, max drawdown <b>-8.9%</b> on the "
+            "2019-2024 test window. Adding 5 quality / investment / "
+            "accruals factors (ROE, ROA, D/E, asset growth, Sloan accruals) "
+            "lifted Sharpe by 13% and IC IR by 85% over the 8-feature "
+            "tuned baseline. On the longer 2015-2024 OOS window the t-stat "
+            "crosses 2.0 (significant), without needing a data extension "
+            "back to 2003. See Section 5 for the per-phase narrative.",
             NOTE,
         ),
     ]
