@@ -146,6 +146,7 @@ def run_walk_forward_backtest(
     test_window: int,
     transaction_cost_bps: float = 10.0,
     regime_fn: RegimeFn | None = None,
+    sector_map: dict[str, str] | pd.Series | None = None,
     long_quantile: float = 0.9,
     short_quantile: float = 0.1,
     rebalance: str = "M",
@@ -207,6 +208,15 @@ def run_walk_forward_backtest(
         ``k_per_sector`` override). If ``None``, the backtest runs at
         constant 1.0x gross leverage using only the static quantile cutoffs
         (i.e. no regime overlay).
+    sector_map : dict[str, str] or pd.Series, optional
+        Maps asset (ticker) -> sector label. Required to activate Layer 3
+        **sector-neutral** construction: when a regime returns
+        ``k_per_sector`` AND this map is provided, each rebalance picks the
+        top-``k_per_sector`` / bottom-``k_per_sector`` names by score *within
+        each sector* instead of globally. If ``k_per_sector`` is requested
+        but ``sector_map`` is ``None``, the engine warns once and falls back
+        to global quantile selection. Assets missing from the map are bucketed
+        under ``"UNKNOWN"``. Build it from ``factors.load_sector_map()``.
     long_quantile, short_quantile : float
         Cross-sectional quantile cutoffs for the long and short legs,
         used when ``regime_fn`` is ``None`` or when the regime dict does
@@ -282,40 +292,57 @@ def run_walk_forward_backtest(
     k_per_sector_warned = False  # warn at most once per backtest
     prev_weights: pd.Series = pd.Series(dtype=float)  # empty at t=0
     cost_rate = transaction_cost_bps / 10_000.0  # bps -> fraction
+    fitted = False  # becomes True after the first successful model.fit
+    # Normalise sector_map to a plain dict once (accepts dict or Series).
+    _sector_lookup: dict[str, str] = (
+        dict(sector_map) if sector_map is not None else {}
+    )
 
     for i in range(train_window, len(rebal_dates) - 1):
         rebal_t = rebal_dates[i]
         next_t = rebal_dates[i + 1]
-        train_t0 = rebal_dates[i - train_window]
 
-        # 2a. Build training panel: features at dates [train_t0, rebal_t),
-        # paired with NEXT-period return as the label.
-        train_dates = rebal_dates[i - train_window : i]
-        X_train = features.loc[(slice(train_t0, train_dates[-1]), slice(None)), :]
-        # Labels: returns at the date AFTER each feature date.
-        # rebal_dates is sorted, so use the next-date map.
-        next_date_map = dict(zip(train_dates, rebal_dates[i - train_window + 1 : i + 1]))
-        y_train_rows = []
-        for (d, asset) in X_train.index:
-            nd = next_date_map.get(d)
-            if nd is None:
-                y_train_rows.append(float("nan"))
-                continue
-            if asset in returns.columns:
-                y_train_rows.append(returns.at[nd, asset])
-            else:
-                y_train_rows.append(float("nan"))
-        y_train = pd.Series(y_train_rows, index=X_train.index, name="next_return")
+        # 2a. Refit ONLY at the start of each test block (every `test_window`
+        # rebalances), then reuse the frozen model for the rest of the block.
+        # This is the walk-forward scheme the docstring describes. The old
+        # code refit every period regardless of test_window, which is up to
+        # `test_window`x more model fits for no design reason -- slow for
+        # hyperparameter sweeps. `not fitted` forces a fit on the first
+        # usable step even if it is not a block boundary.
+        is_refit_step = ((i - train_window) % test_window == 0)
+        if is_refit_step or not fitted:
+            train_t0 = rebal_dates[i - train_window]
+            # Build training panel: features at dates [train_t0, rebal_t),
+            # paired with NEXT-period return as the label.
+            train_dates = rebal_dates[i - train_window : i]
+            X_train = features.loc[(slice(train_t0, train_dates[-1]), slice(None)), :]
+            # Labels: returns at the date AFTER each feature date.
+            next_date_map = dict(
+                zip(train_dates, rebal_dates[i - train_window + 1 : i + 1])
+            )
+            y_train_rows = []
+            for (d, asset) in X_train.index:
+                nd = next_date_map.get(d)
+                if nd is None:
+                    y_train_rows.append(float("nan"))
+                    continue
+                if asset in returns.columns:
+                    y_train_rows.append(returns.at[nd, asset])
+                else:
+                    y_train_rows.append(float("nan"))
+            y_train = pd.Series(y_train_rows, index=X_train.index, name="next_return")
+            # Drop rows where label is NaN (asset not yet listed / delisted)
+            keep = y_train.notna()
+            X_train = X_train.loc[keep]
+            y_train = y_train.loc[keep]
+            if len(X_train) > 0:
+                model = model.fit(X_train, y_train)
+                fitted = True
 
-        # Drop rows where label is NaN (asset not yet listed / delisted)
-        keep = y_train.notna()
-        X_train = X_train.loc[keep]
-        y_train = y_train.loc[keep]
-
-        if len(X_train) == 0:
-            continue  # nothing to train on this step, skip
-
-        model = model.fit(X_train, y_train)
+        # Can't trade until we have a fitted model (e.g. the first block's
+        # training panel was entirely NaN labels).
+        if not fitted:
+            continue
 
         # 2b. Predict at rebal_t for eligible universe
         if rebal_t not in features.index.get_level_values(0):
@@ -346,31 +373,59 @@ def run_walk_forward_backtest(
         short_q = regime_params.get("short_quantile", short_quantile)
         leverage_t = float(regime_params.get("leverage", 1.0))
 
-        if "k_per_sector" in regime_params and not k_per_sector_warned:
-            import warnings
-            warnings.warn(
-                "regime_fn returned 'k_per_sector' but sector-neutral "
-                "construction is not yet implemented in this backtest "
-                "(staged for a follow-up commit). Falling back to global "
-                "quantile-based selection. This warning fires at most once.",
-                UserWarning,
-                stacklevel=2,
+        # 2d. Select the long / short legs. Two modes:
+        #   * Sector-neutral (Layer 3): the regime asked for `k_per_sector`
+        #     AND a `sector_map` was provided -> pick the top-k / bottom-k by
+        #     score WITHIN each sector. Removes sector tilts from the book.
+        #   * Global (default): top / bottom quantile across the whole
+        #     cross-section.
+        k_per_sector = regime_params.get("k_per_sector")
+        if k_per_sector is not None and sector_map is not None:
+            sectors = pd.Series(
+                {a: _sector_lookup.get(a, "UNKNOWN") for a in scores.index},
+                name="sector",
             )
-            k_per_sector_warned = True
+            long_list: list = []
+            short_list: list = []
+            for _sector, grp in scores.groupby(sectors):
+                ranked = grp.sort_values(ascending=False)
+                # Cap k so a thin sector can't put the same name in both legs.
+                k = min(int(k_per_sector), len(ranked) // 2)
+                if k < 1:
+                    continue
+                long_list.extend(ranked.head(k).index.tolist())
+                short_list.extend(ranked.tail(k).index.tolist())
+            longs = pd.Index(long_list)
+            shorts = pd.Index(short_list)
+        else:
+            if (
+                k_per_sector is not None
+                and sector_map is None
+                and not k_per_sector_warned
+            ):
+                import warnings
+                warnings.warn(
+                    "regime_fn returned 'k_per_sector' but no sector_map was "
+                    "passed to run_walk_forward_backtest; falling back to global "
+                    "quantile selection. Pass sector_map to enable sector-neutral "
+                    "construction. This warning fires at most once.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                k_per_sector_warned = True
+            # NOTE strict inequalities: when all scores are identical (e.g.
+            # UniformModel), both cutoffs collapse to the same value and a
+            # `>=` / `<=` rule would put every stock into BOTH legs, with the
+            # short overwriting the long -> 100% short portfolio. Strict
+            # `>` / `<` correctly yields an empty portfolio in that case.
+            long_cut = scores.quantile(long_q)
+            short_cut = scores.quantile(short_q)
+            longs = scores[scores > long_cut].index
+            shorts = scores[scores < short_cut].index
 
-        # 2d. Build long-short portfolio: equal-weight within each leg,
-        # dollar-neutral before leverage (|long sum| = |short sum| = 1.0),
-        # then scaled by the regime's leverage multiplier.
-        # NOTE strict inequalities: when all scores are identical (e.g.
-        # UniformModel), both cutoffs collapse to the same value and a
-        # `>=` / `<=` rule would put every stock into BOTH legs, with the
-        # short overwriting the long -> 100% short portfolio. Strict
-        # `>` / `<` correctly yields an empty portfolio in that case.
-        long_cut = scores.quantile(long_q)
-        short_cut = scores.quantile(short_q)
-        longs = scores[scores > long_cut].index
-        shorts = scores[scores < short_cut].index
-
+        # Equal-weight within each leg, dollar-neutral before leverage
+        # (|long sum| = |short sum| = 1.0), then scaled by the regime's
+        # leverage multiplier.
         weights = pd.Series(0.0, index=scores.index, name=rebal_t)
         if len(longs) > 0:
             weights.loc[longs] = 1.0 / len(longs)
@@ -445,6 +500,7 @@ def run_walk_forward_backtest(
         "total_cost_drag_pct": (gross_returns.sum() - portfolio_returns.sum()) * 100,
         "avg_monthly_turnover": float(turnover_series.mean()),
         "regime_fn_applied": regime_fn is not None,
+        "sector_neutral_available": sector_map is not None,
         "avg_leverage": float(leverage_series.mean()),
         "leverage_range": (float(leverage_series.min()), float(leverage_series.max())),
         "random_state": random_state,
@@ -473,7 +529,15 @@ def run_walk_forward_backtest(
 # 0.1.0 (2026-05-11): initial contract (CrossSectionalModel + LeverageFn).
 # --------------------------------------------------------------------------
 
-INTERFACE_VERSION = "0.2.0"
+# Changelog:
+#   0.1.0 - initial: scalar LeverageFn overlay.
+#   0.2.0 - widen overlay: RegimeFn returning RegimeParams.
+#   0.3.0 - add optional `sector_map` param + implement Layer 3 sector-neutral
+#           construction (k_per_sector now active when sector_map is passed);
+#           refit gated by `test_window` instead of every rebalance. Adding an
+#           optional kwarg is backward-compatible, but the refit change alters
+#           results for test_window > 1, so it's a minor-version bump.
+INTERFACE_VERSION = "0.3.0"
 
 
 # --------------------------------------------------------------------------

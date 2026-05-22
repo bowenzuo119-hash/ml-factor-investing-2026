@@ -59,6 +59,14 @@ print(torch.cuda.is_available())  # CPU is fine for everything except the NN bas
 
 If you hit a `pandas_datareader` import error, make sure pandas is < 3.0 (see DECISIONS.md, entry 2026-04-23).
 
+**macOS only — libomp deadlock during NN / XGBoost training.** On macOS, having both PyTorch's and XGBoost's bundled `libomp` loaded in one process can deadlock (the walk-forward NN baseline hangs with no error). Export this before running any training:
+
+```bash
+export KMP_DUPLICATE_LIB_OK=TRUE
+```
+
+Add it to your shell profile, or set it at the top of a notebook with `os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"` **before** importing torch/xgboost. Linux/Windows are unaffected.
+
 ## Reproducibility rules
 
 * Every model gets `random_state=42`. Every sampling step gets a seed. No exceptions.

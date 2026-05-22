@@ -597,6 +597,19 @@ New features collectively account for **23.7% of total SHAP magnitude** — they
 **Revisit if:** Bowen ships Layer 3 (then re-run sector audit and likely all 4 diagnostics — Sharpe could move further once sector tilts are removed), or once the 2003-2025 data extension lands (then Phase 7 bootstrap and DSR on the 12-year window are the new robustness check).
 
 
+## 2026-05-22 — Backtest engine v0.3.0: Layer 3 sector-neutral + refit gated by test_window
+
+**Context:** Two issues Person B hit while pushing Phase 8: (1) `k_per_sector` was in the `RegimeParams` type but the rebalance loop only warned and fell back to global deciles, so Layer 3 sector-neutral construction was never actually wired (B's Phase 2 hit a Sharpe ceiling partly because of this). (2) The docstring described refitting once per `test_window`-length test block, but the loop called `model.fit` every single rebalance — making hyperparameter sweeps up to `test_window`x slower than the design intended.
+
+**Options considered (Layer 3 sector source):** (a) Add an explicit `sector_map` parameter (asset->sector) to `run_walk_forward_backtest` — keeps the engine's input contract clean and the feature matrix free of a non-numeric `sector` column. (b) Read a `sector` column out of the `features` panel — no signature change, but couples the engine to B's panel layout and risks the string column leaking into the model's `X`. **Options considered (refit):** (c) gate `model.fit` so it only runs at the start of each test block (matches docstring, faster); (d) just rewrite the docstring to admit it refits every period (no speedup).
+
+**Decision:** (a) + (c). Bumped `INTERFACE_VERSION` to **0.3.0**. New optional `sector_map` kwarg activates within-sector top-k/bottom-k selection when a regime returns `k_per_sector`; missing map => warn once + global fallback (unchanged behaviour for callers who don't pass it). Refit now fires only when `(i - train_window) % test_window == 0` (plus a forced first fit), reusing the frozen model across the block.
+
+**Reasoning:** Adding an optional kwarg is backward-compatible, so existing callers (and the sanity suite) are unaffected — verified 3/3 sanity still passes and a synthetic 5-sector test picks exactly `k_per_sector` names per sector per leg. The refit change is the one behaviour shift: for `test_window > 1` it alters results because the model is frozen across each block (which is the *intended* walk-forward design), so Person B must re-run and re-validate the headline Sharpe on the corrected engine.
+
+**Revisit if:** Sector-neutral construction needs value-weighting within sector (currently equal-weight), or `test_window` is set so large that a frozen model goes stale within a block (then shrink `test_window`).
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
