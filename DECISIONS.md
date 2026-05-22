@@ -425,6 +425,29 @@ Canonical XGBoost: β = +0.046 (not distinguishable from zero), α = +4.69% / ye
 **Revisit if:** an updated feature set (e.g., lag features in Phase 5c) shifts the realised β above +0.15 with a significant t-stat (then add the explicit beta hedge), or if the regime overlay (Person C) creates regime-conditional beta drift (then measure per-regime).
 
 
+## 2026-05-22 — Lag features hurt: do not include in the canonical model
+
+**Context:** Project Framework section 3.5 prescribes lag features as a way to encode temporal trajectories ("rising momentum predicts X, falling momentum predicts Y") for time-blind models like XGBoost. Implemented `lag_months` parameter in `factors.build_feature_panel` so a single call returns the 8 base features plus 1-month and 2-month lags (24 columns total). Re-ran the canonical Phase-3c walk-forward with the wider panel and the SAME tuned XGBoost hyperparameters.
+
+**Options considered:** (a) Adopt lag features unconditionally as a methodological completion of the Framework's section 3.5 — fastest but only valid if the data supports it. (b) Empirical gate: only adopt if test-window IC / Sharpe go up. (c) Skip lag features and document the empirical evidence.
+
+**Decision:** Option (c). Headline metrics on the 2019-2024 test window with 24 features and the Phase-3c tuned XGBoost defaults (n_estimators=200, max_depth=4, learning_rate=0.0104, etc., unchanged):
+
+| Model    | Sharpe (8-feat → 24-feat) | IC (8 → 24) | Max DD (8 → 24) |
+|----------|---------------------------|---------------|------------------|
+| Lasso    | +0.04 → +0.01             | -0.026 → -0.022 | -19.1% → -19.3%  |
+| **XGBoost**| **+0.589 → -0.569**     | **+0.012 → -0.006** | **-10.5% → -33.5%** |
+| NN       | +0.17 → +0.32             | -0.005 → -0.007 | -16.9% → -20.0%  |
+
+XGBoost catastrophically degraded. Sharpe went from +0.589 to -0.569 -- the model lost a full unit of Sharpe just from adding 16 lag columns. IC turned negative. Drawdown 3x worse. NN improved slightly (dropout helps with the wider input). Lasso barely moved (L1 likely zeroes the lag coefficients).
+
+**Reasoning:** The tuned hyperparameters (especially `reg_alpha=0.44`, `reg_lambda=3.14`, `min_child_weight=14`) were selected by Optuna on the 8-feature panel, where they delivered a Sharpe of +0.589 by aggressively regularising 8 noisy features. Tripling the feature count tripled the noise budget the regulariser has to suppress -- it cannot, and the model starts learning spurious patterns in the lag columns. The correct fix would be to re-run Optuna on the 24-feature panel (probably another +50% increase in regularisation strength is needed). That is real work and may still not produce a Sharpe above +0.59 -- the lag information is itself weak and ambiguous (1-month-lagged momentum is just last month's already-stale signal). For this project, drop lag features cleanly and document.
+
+**For the report:** A short paragraph: "we tested 1-month and 2-month lag features (Framework section 3.5) and found them catastrophically harmful to XGBoost without re-tuning hyperparameters (Sharpe collapse from +0.589 to -0.569). The trajectory information is either weak enough that the noise it adds dominates, or requires hyperparameters tuned specifically for the wider feature set. We did not pursue re-tuning because the Phase-3c headline number is already strong and our Optuna budget had been used."
+
+**Revisit if:** we get more compute budget for a 200-trial Optuna re-tune on the 24-feature panel, or if a future regime overlay produces feature-importance evidence that lag structure carries time-varying signal.
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:

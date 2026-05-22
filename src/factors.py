@@ -407,6 +407,7 @@ def build_feature_panel(
     include: tuple[str, ...] = ("mom", "rev", "log_mktcap", "mvol", "ivol",
                                 "bm", "ep", "dvol"),
     sector_rank: bool = True,
+    lag_months: tuple[int, ...] = (),
 ) -> pd.DataFrame:
     """Build the long-format feature panel the backtest engine expects.
 
@@ -553,6 +554,22 @@ def build_feature_panel(
     # 5. Sector-relative ranks (Layer 1) ------------------------------
     if sector_rank:
         panel = sector_relative_rank(panel, feature_cols=feature_cols)
+
+    # 6. Optional lag features (Framework §3.5) -----------------------
+    # For each requested lag k, add per-feature columns x_{t-k} per ticker
+    # so the model can pick up trajectory effects ("rising momentum"
+    # vs "falling momentum"). The lag operates on the post-rank panel so
+    # the lagged columns are also rank-shaped and don't need re-ranking.
+    if lag_months:
+        original_cols = list(feature_cols)
+        for k in lag_months:
+            lagged = (
+                panel[original_cols]
+                .groupby(level="ticker")
+                .shift(k)
+                .rename(columns={c: f"{c}_lag{k}" for c in original_cols})
+            )
+            panel = pd.concat([panel, lagged], axis=1)
 
     return panel
 
