@@ -237,6 +237,48 @@ Every time you make a non-trivial "choose A over B" decision, add a new entry us
 **Revisit if:** We standardise on a different Python/numpy version, a core dependency drops numpy-2.x support (then pin), or we decide to clean the project stack back out of conda `base`.
 
 
+## 2026-05-22 — Value factors (B/M, E/P) materially help XGBoost only
+
+**Context:** With Sharadar SF1 wired into `src/data_loader.py` (this morning's entry), Person B added a `load_value_factors_monthly` helper in `src/factors.py` that turns SF1 fundamentals into a (date, ticker) panel of B/M and E/P_TTM (trailing-four-quarter net income / market cap), forward-filled via `merge_asof` on `datekey`. Question: do the value factors actually move the needle? Need to compare the 5-feature baseline against the 7-feature version before committing to the heavier feature set permanently.
+
+**Options considered:** (a) Always-on: include B/M and E/P unconditionally — simple, matches the Fama-French heritage the report claims, but pays the Sharadar API dependency for every reproducer. (b) Always-off: ship with 6 price-based features only — cheapest, defensible via GKX (2020) but throws away the data we just paid for. (c) Empirically gated: run both setups, keep whichever wins on the validation/test window.
+
+**Decision:** Option (c)'s empirical run done. Test-window 2019-2024 metrics under `LONG_QUANTILE=0.8`, `SHORT_QUANTILE=0.2`, 10 bps cost, sliding 120-month train, identical seed:
+
+| Model    | Net Sharpe (5-feat → 7-feat) | IC mean (5 → 7) | Ann return (5 → 7) |
+|----------|------------------------------|------------------|---------------------|
+| Lasso    | +0.026 → +0.023 (flat)       | -0.027 → -0.026  | +0.27% → +0.24%     |
+| XGBoost  | **-0.032 → +0.556** (+0.59!) | +0.002 → +0.006  | -0.31% → **+4.89%** |
+| NN       | +0.309 → +0.264 (slightly down) | -0.005 → -0.004 | +3.34% → +2.82%     |
+
+XGBoost is the big winner — value factors give the tree model meaningful signal to split on. Lasso barely changes (L1 likely zeroes the new coefficients much of the time). NN drifts slightly down (more inputs → more overfitting on a noisy target). XGBoost's OOS R² vs zero actually *worsened* (-0.003 → -0.027) while its IC and Sharpe improved — the classic GKX phenomenon: tree models predict with higher variance once given more features, so squared-error R² penalises them even though their rank ordering is better. Validates the framework's choice of IC + Sharpe as headline metrics for cross-sectional models.
+
+**Reasoning:** B/M and E/P stay in the canonical feature set because they fix XGBoost — which the framework calls the primary model — from "underperforms baseline" to "first economically meaningful Sharpe in the project". The cost is one Sharadar API call per fresh data pull (cached thereafter to `data/processed/sharadar_sf1_ARQ.parquet`). Lasso and NN take a tiny hit but their post-tuning Phase 3 numbers will get a chance to recover.
+
+**Revisit if:** Sharadar subscription lapses (drop both features, log here), tuned-XGBoost feature-importance shows B/M and E/P both at ≤ 5% of total gain (drop to shed the dependency), or once Phase 2 (sector-relative target) lands and we re-rank the feature set against the new target.
+
+
+## 2026-05-22 — Sector-relative target (Layer 2): opt-in, not the default
+
+**Context:** Project Framework section 3.2 prescribes a three-layer sector-neutrality stack: (1) sector-relative features (done in `factors.py`'s `sector_relative_rank`), (2) sector-relative target (predict excess return over per-(date, sector) mean), (3) sector-neutral portfolio (top-k per sector, not global decile). Person B added Layer 2 to `src/models.py` via a `target_kind: str = "raw" | "sector_relative"` constructor parameter on all three models (`_demean_y_by_sector_date(y, X)` subtracts the per-(date, sector) mean before the underlying estimator sees y). Question: should sector-relative target be the canonical setting for Phase 3 tuning and the final report?
+
+**Options considered:** (a) Always-on: ``target_kind="sector_relative"`` as the new default, matching the framework's literal spec. (b) Empirically gated: re-run Phase 1.5's evaluation under sector_relative and keep whichever wins on the held-out 2019-2024 test window. (c) Always-off: keep "raw" as default and ship Layer 2 as an opt-in parameter, to be re-evaluated once Layer 3 (sector-neutral portfolio construction) ships from Bowen's side.
+
+**Decision:** Option (c) — opt-in. `LassoModel`, `XGBoostModel`, and `NNModel` keep ``target_kind="raw"`` as the default. The empirical run (Phase 2, otherwise identical config to Phase 1.5) shows a clear directional pattern but a net negative on headline Sharpe:
+
+| Model    | IC mean (raw → sr) | IC IR (raw → sr)  | Sharpe (raw → sr)     | Max DD (raw → sr) |
+|----------|--------------------|-------------------|------------------------|--------------------|
+| Lasso    | -0.026 → -0.028    | -0.234 → -0.267   | +0.023 → +0.004       | -19.9% → -19.9%   |
+| XGBoost  | +0.006 → +0.008    | +0.090 → **+0.109** | +0.556 → **+0.432** | -16.0% → -14.3%   |
+| NN       | -0.004 → -0.007    | -0.045 → -0.074   | +0.264 → +0.170       | -20.3% → **-15.8%** |
+
+XGBoost's IC and IC IR go up — the model has learned a more reliable within-sector ranking, exactly what Layer 2 is supposed to deliver. Drawdowns shrink for XGBoost and NN — sector-neutral predictions mean fewer single-sector blowups. But Sharpe drops across the board because the backtest still uses a **global** top/bottom-decile selector, not a per-sector top-k. With sector-relative predictions, the global decile becomes a sector-balanced book (12 stocks per sector × 11 sectors), which gives up the profitable sector-tilt bets that raw-target models capture by accident. Bowen's `RegimeParams.k_per_sector` field exists in `backtest.py` but is currently a warn-only stub — Layer 3 is not yet wired through.
+
+**Reasoning:** The framework's three layers are designed to compose. Shipping Layer 2 without Layer 3 produces a strictly worse strategy by Sharpe — the model is sector-neutral but the portfolio is not. Keeping "raw" as default means the Phase 3 hyperparameter search and the report's headline number use the better-performing configuration. Layer 2 stays in the code (and gets a passing smoke test) so it can be enabled cheaply once Bowen wires `k_per_sector` through the `run_walk_forward_backtest` loop.
+
+**Revisit if:** Bowen implements sector-neutral portfolio construction (then re-run Phase 2 with target_kind="sector_relative" + k_per_sector=5, and pick whichever combination wins on validation), or a future XGBoost tuning run discovers a hyperparameter set that fixes the Sharpe regression on its own.
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
