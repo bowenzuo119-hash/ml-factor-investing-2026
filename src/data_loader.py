@@ -36,6 +36,7 @@ import os
 from pathlib import Path
 from urllib.request import urlretrieve
 
+import numpy as np
 import pandas as pd
 
 # Project-relative data directory. Files here are gitignored; the *code* that
@@ -68,6 +69,12 @@ CRSP_LAST_DATE = pd.Timestamp("2022-12-30")
 # on the same universe) without re-hitting the network. See
 # `_load_yfinance_monthly_raw` for the cache hit/miss rules.
 YFINANCE_MONTHLY_CACHE = "yfinance_monthly.parquet"
+
+# Monthly dollar-volume cache (Feature 4). Derived from yfinance DAILY
+# close x volume, trailing-window averaged, sampled at month-ends. Separate
+# file from the monthly OHLCV cache because it needs the daily series the
+# monthly cache throws away. See `load_dollar_volume_monthly`.
+DOLLAR_VOLUME_CACHE = "yfinance_dollar_volume_monthly.parquet"
 
 # FRED macro series for Person C's regime model. Picked per Project
 # Framework §4.4 ("Macro for Person C: VIX, DGS10, DGS2, DBAA, DAAA, DFF").
@@ -798,6 +805,207 @@ def load_prices_yfinance(
     return _load_yfinance_monthly_raw(
         tickers, start=start, end=end, force_rebuild=force_rebuild
     )
+
+
+def load_dollar_volume_monthly(
+    *,
+    start: str,
+    end: str,
+    universe: tuple[str, ...] | list[str] | None = None,
+    window: int = 21,
+    force_rebuild: bool = False,
+) -> pd.DataFrame:
+    """Monthly trailing-window average dollar volume from yfinance daily data.
+
+    Implements **Feature 4 (Dollar Volume)** from the Person A Feature Spec.
+    The provided CRSP MSF extract has no volume column, and the Sharadar
+    subscription's SEP table is sample-only (ends 2018), so yfinance daily
+    ``close * volume`` is the only full-window source for trading liquidity.
+
+    For each ticker: ``daily_dollar_volume = adj_close * volume``; take the
+    trailing ``window``-trading-day mean; then sample that rolling value at
+    each trading-day month-end. (``close * volume`` is split-invariant -- a
+    2:1 split halves price and doubles volume -- so auto-adjusted inputs
+    still give the right dollar amount.)
+
+    Parameters
+    ----------
+    start, end : str
+        Inclusive ISO bounds on the returned month-ends.
+    universe : sequence of str, optional
+        Tickers to pull. ``None`` (default) = the S&P 500 union over
+        ``[start, end]`` via :func:`_sp500_union_in_window`.
+    window : int, default 21
+        Trailing window in trading days (~1 calendar month), per the spec.
+    force_rebuild : bool, keyword-only, default False
+        Bypass the cache and re-download.
+
+    Returns
+    -------
+    pd.DataFrame
+        ``(date, ticker)`` MultiIndex; ``date`` is the trading-day month-end
+        (aligned with :func:`load_prices` / :func:`load_prices_spliced`).
+        Columns:
+
+        ================= ===============================================
+        dollar_volume     Mean daily $ traded over the trailing window (USD)
+        log_dollar_volume ``log(dollar_volume)`` -- the form to rank / feed
+                          the model (raw dollar volume is heavily skewed)
+        ================= ===============================================
+
+    Notes
+    -----
+    * Tickers yfinance can't serve under their historical symbol (delisted /
+      renamed before ~2022) are missing -- the same coverage gap as
+      :func:`load_prices_yfinance`. Person B should treat a missing
+      dollar-volume the same way as a missing return.
+    * Cache: ``data/processed/yfinance_dollar_volume_monthly.parquet``, a
+      union over (ticker, month) like the other yfinance caches.
+    """
+    cache_path = PROCESSED_DIR / DOLLAR_VOLUME_CACHE
+    requested = (
+        tuple(sorted({str(t).strip().upper() for t in universe}))
+        if universe is not None
+        else _sp500_union_in_window(start, end)
+    )
+    if not requested:
+        raise ValueError(f"Empty universe for window {start} -> {end}.")
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+
+    # --- Cache hit path (period-of-month coverage, like the OHLCV loader) ---
+    expected_periods = pd.period_range(start_ts, end_ts, freq="M")
+    if not force_rebuild and cache_path.exists() and len(expected_periods) > 0:
+        cached = pd.read_parquet(cache_path)
+        cached_tickers = set(cached.index.get_level_values("ticker"))
+        cached_periods = pd.PeriodIndex(
+            cached.index.get_level_values("date"), freq="M"
+        )
+        if (
+            set(requested).issubset(cached_tickers)
+            and cached_periods.min() <= expected_periods[0]
+            and cached_periods.max() >= expected_periods[-1]
+        ):
+            print(
+                f"[load_dollar_volume] cache hit: {len(requested)} tickers, "
+                f"{start_ts.date()} -> {end_ts.date()}"
+            )
+            d = cached.index.get_level_values("date")
+            t = cached.index.get_level_values("ticker")
+            mask = (d >= start_ts) & (d <= end_ts) & t.isin(requested)
+            return cached.loc[mask].sort_index()
+
+    # --- Cache miss: fetch DAILY from Yahoo --------------------------------
+    import time
+    import yfinance as yf
+
+    # Fetch a buffer before `start` so the first month-end has a full
+    # trailing window. ~window trading days ~= 1.5x in calendar days; pad
+    # generously (10 weeks) to also cover holidays.
+    buffer_start = (start_ts - pd.Timedelta(days=70)).strftime("%Y-%m-%d")
+    yf_end = (end_ts + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+    CHUNK_SIZE = 100
+    CHUNK_SLEEP_SEC = 2.0
+    n_chunks = (len(requested) + CHUNK_SIZE - 1) // CHUNK_SIZE
+    print(
+        f"[load_dollar_volume] downloading DAILY for {len(requested)} tickers "
+        f"in {n_chunks} chunk(s) ({buffer_start} -> {end_ts.date()})..."
+    )
+
+    frames: list[pd.DataFrame] = []
+    for chunk_ix in range(n_chunks):
+        chunk = list(requested[chunk_ix * CHUNK_SIZE : (chunk_ix + 1) * CHUNK_SIZE])
+        if n_chunks > 1:
+            print(f"[load_dollar_volume]   chunk {chunk_ix + 1}/{n_chunks}: "
+                  f"{len(chunk)} tickers")
+        raw = yf.download(
+            tickers=chunk,
+            start=buffer_start,
+            end=yf_end,
+            interval="1d",
+            auto_adjust=True,
+            progress=False,
+            threads=True,
+            group_by="ticker",
+        )
+        if isinstance(raw.columns, pd.MultiIndex):
+            per_ticker = {
+                t: raw[t] for t in chunk if t in raw.columns.get_level_values(0)
+            }
+        else:
+            per_ticker = {chunk[0]: raw}
+
+        for tkr, sub in per_ticker.items():
+            if sub.empty or sub["Close"].dropna().empty:
+                print(f"[load_dollar_volume]     no data: {tkr}")
+                continue
+            sub = sub.sort_index()
+            # Daily $ volume, trailing-window mean. min_periods lets early
+            # months produce a (slightly noisier) value rather than NaN.
+            dvol = (sub["Close"] * sub["Volume"]).rolling(
+                window, min_periods=max(5, window // 2)
+            ).mean()
+            # Sample at the last trading day of each month.
+            monthly = (
+                dvol.to_frame("dollar_volume")
+                .groupby(dvol.index.to_period("M"), group_keys=False)
+                .tail(1)
+            )
+            monthly = monthly[monthly.index >= start_ts]
+            monthly = monthly.dropna()
+            if monthly.empty:
+                continue
+            monthly["ticker"] = tkr
+            monthly.index.name = "date"
+            frames.append(
+                monthly.reset_index().set_index(["date", "ticker"])[["dollar_volume"]]
+            )
+
+        if chunk_ix + 1 < n_chunks:
+            time.sleep(CHUNK_SLEEP_SEC)
+
+    if not frames:
+        if cache_path.exists():
+            cached = pd.read_parquet(cache_path)
+            d = cached.index.get_level_values("date")
+            t = cached.index.get_level_values("ticker")
+            mask = (d >= start_ts) & (d <= end_ts) & t.isin(requested)
+            if mask.any():
+                print(
+                    f"[load_dollar_volume] WARN: fresh fetch returned 0 rows "
+                    f"(Yahoo rate limit?). Returning cached subset of "
+                    f"{int(mask.sum()):,} rows."
+                )
+                return cached.loc[mask].sort_index()
+        raise RuntimeError(
+            f"[load_dollar_volume] no data for any of {len(requested)} tickers "
+            f"and the cache cannot fill the gap. Likely Yahoo rate limit -- "
+            f"wait a few minutes and retry."
+        )
+
+    fresh = pd.concat(frames).sort_index()
+    fresh["log_dollar_volume"] = np.log(fresh["dollar_volume"])
+
+    if not force_rebuild and cache_path.exists():
+        cached = pd.read_parquet(cache_path)
+        merged = pd.concat([cached, fresh])
+        merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+    else:
+        merged = fresh
+
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    merged.to_parquet(cache_path, compression="snappy")
+    size_kb = cache_path.stat().st_size / 1024
+    print(
+        f"[load_dollar_volume] cached {len(merged):,} rows ({size_kb:.1f} KB) "
+        f"-> {cache_path.name}"
+    )
+
+    d = merged.index.get_level_values("date")
+    t = merged.index.get_level_values("ticker")
+    mask = (d >= start_ts) & (d <= end_ts) & t.isin(requested)
+    return merged.loc[mask].sort_index()
 
 
 def load_prices_spliced(
