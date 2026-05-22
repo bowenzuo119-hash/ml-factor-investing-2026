@@ -209,6 +209,32 @@ Every time you make a non-trivial "choose A over B" decision, add a new entry us
 **Revisit if:** TA produces an updated CRSP that covers 2023-2024 (then deprecate the yfinance half and re-route through CRSP), or if a future overlap-check run shows median correlation drop below 0.99 (then debug what changed in yfinance's data quality).
 
 
+## 2026-05-22 — Resolve deferred fundamentals: Sharadar SF1 via Nasdaq Data Link (supersedes 2026-05-13 'Defer fundamentals')
+
+**Context:** The 2026-05-13 "Defer fundamentals" entry set a hard fork: pursue Compustat if the course TA granted access, otherwise "by 2026-05-20 with no reply, formally adopt skip-fundamentals." That date has passed with no Compustat channel materialising. Separately, Person A obtained a personal Nasdaq Data Link subscription that includes Sharadar Core US Fundamentals (SF1) — which carries exactly the point-in-time book equity, earnings, and market cap the Fama-French value factors (B/M, E/P) need, i.e. a Compustat-equivalent at hobby-tier cost. So the real choice is no longer "Compustat or nothing."
+
+**Options considered:** (a) Honour the deferral's fallback and ship price-only features — zero new dependencies/cost, defensible via GKX (2020) which ranks fundamentals at 50+, but drops the value factors Person B explicitly asked for ("even 20% importance is still important") and weakens the "we replicated the Fama-French stack" report claim. (b) Sharadar SF1 via Nasdaq Data Link — point-in-time (ARQ dimension, dated by `datekey`, no restatements), Compustat-grade coverage including delisted firms, B/M and E/P straight from `equity` / `netinc` / `marketcap`; cost is a paid API key that must be kept out of git plus a new `nasdaq-data-link` dependency. (The 2026-05-18 yfinance entry had rejected Sharadar *for prices* on cost/procurement grounds — but for fundamentals there is no free alternative of comparable quality, so the trade-off flips.) (c) Keep waiting for Compustat — already timed out; blocks Person B indefinitely.
+
+**Decision:** Option (b). Add `load_fundamentals` (plus a thin `compute_value_factors` helper) to `src/data_loader.py`, sourcing SHARADAR/SF1 over Nasdaq Data Link. Default dimension is `ARQ` (as-reported quarterly, point-in-time); the join key is `datekey` (the date a filing became public), never `calendardate` (fiscal period end), to avoid look-ahead. The API key lives in a gitignored `.env` (`NASDAQ_DATA_LINK_API_KEY`) and is loaded lazily, so the CRSP / yfinance / FRED loaders still import with no key. `.env.example` documents the variable; `nasdaq-data-link` and `python-dotenv` are added to requirements.txt.
+
+**Reasoning:** The only thing blocking the value factors was data access, and a Sharadar subscription removes it at low cost while preserving point-in-time correctness (the very reason we moved to CRSP for prices on 2026-05-13). Lazy key-loading keeps fundamentals strictly opt-in for teammates who don't have a key — importing `data_loader` or running the price/macro pipeline never touches Nasdaq.
+
+**Revisit if:** The Sharadar subscription lapses (fall back to option (a), price-only, and say so in the report), or the value factors show negligible feature importance once Person B's model runs (drop them to shed the dependency), or the TA belatedly produces CRSP-Compustat Merged (switch source for a tighter PERMNO↔GVKEY linkage).
+
+
+## 2026-05-22 — Canonical Python env is the `mlfactor` venv (numpy 2.x); do NOT pin numpy
+
+**Context:** A `pip install -r requirements.txt` run accidentally executed in the anaconda **`base`** env floated the then-unpinned `numpy` to 2.2.6, which broke `base`'s numpy-1.x-compiled binaries (pandas, pyarrow, numba, streamlit, pywavelets): *"A module compiled using NumPy 1.x cannot be run in NumPy 2.2.6."* The first instinct was to pin `numpy<2`. But on listing the conda envs we found the project already has a dedicated env, **`mlfactor`** (Python 3.11), which is a clean, internally-consistent **numpy-2.x** stack (numpy 2.4.4, pandas 2.3.3, pyarrow 24, shap 0.51 — all built for the numpy-2.x ABI). `base` is the user's general anaconda env and is not where this project should run.
+
+**Options considered:** (a) Pin `numpy<2` (and `shap<0.50`) to keep `base` working — but this makes the project's own requirements.txt *hostile to its real env*: running `pip install -r` in `mlfactor` would downgrade numpy 2.4.4 → 1.26 and break mlfactor's numpy-2.x-built pandas/pyarrow. (b) Declare `mlfactor` the canonical env, leave `numpy`/`shap` unpinned, and install only the two missing packages (`nasdaq-data-link`, `python-dotenv`) there — keeps the project on a modern, self-consistent stack; `base`'s breakage is collateral and out of scope. (c) Maintain two requirements files (base vs mlfactor) — overkill for a 3-person project.
+
+**Decision:** Option (b). **`mlfactor` is the canonical project env.** requirements.txt leaves `numpy` and `shap` unpinned (keeps `pandas<3`, still needed for pandas_datareader). `nasdaq-data-link` + `python-dotenv` were installed into `mlfactor`. **Do not run `pip install -r requirements.txt` in conda `base`** — use `conda activate mlfactor` (or point the IDE / Jupyter kernel at `/opt/anaconda3/envs/mlfactor/bin/python`).
+
+**Reasoning:** A project's pinned deps should match the env it actually runs in. `mlfactor` is purpose-built and coherent on numpy 2.x; pinning `numpy<2` to accommodate a polluted `base` would just invert the same ABI break inside the real env. This is exactly the "clean numpy-2.x virtualenv" an earlier draft of this entry named as the revisit trigger — it turned out to already exist. The `base` env was left as-is (still functional on numpy<2); un-polluting it is a separate, lower-priority task.
+
+**Revisit if:** We standardise on a different Python/numpy version, a core dependency drops numpy-2.x support (then pin), or we decide to clean the project stack back out of conda `base`.
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
