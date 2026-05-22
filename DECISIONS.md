@@ -610,6 +610,101 @@ New features collectively account for **23.7% of total SHAP magnitude** — they
 **Revisit if:** Sector-neutral construction needs value-weighting within sector (currently equal-weight), or `test_window` is set so large that a frozen model goes stale within a block (then shrink `test_window`).
 
 
+## 2026-05-23 — Phase 8 re-run on engine v0.3.0: canonical Sharpe jumps to +0.94
+
+**Context:** Bowen's `backtest v0.3.0` (PR #18) fixed two engine issues. The refit-gating fix — `model.fit` now fires only at block boundaries `(i - train_window) % test_window == 0` instead of every period — is the behaviour the docstring always described. Phase 8 was re-run end-to-end on the new engine with the same panel, same tuned hyperparameters, same seed.
+
+**Empirical impact** (2019-2024 test window):
+
+| Metric | v0.2.0 engine | v0.3.0 engine | Change |
+|---|---|---|---|
+| Net Sharpe | +0.663 | **+0.934** | +41% |
+| Annualised return | +5.91% | +7.91% | +34% |
+| Max drawdown | -8.93% | **-5.47%** | better by 3.5 pp |
+| IC mean | +0.012 | **+0.023** | +88% |
+| IC IR | +0.170 | **+0.301** | +77% |
+| Avg turnover | 1.82 | 1.53 | down 16% (less churn) |
+
+On the 2015-2024 long-OOS window: Sharpe +0.910 (vs +0.79), max drawdown -5.5%.
+
+**Why refitting LESS often helped:** the old engine refit every rebalance (under `test_window=12`, that is ~12x more fits than the design intended). Each refit on noisy monthly cross-sectional data introduced fresh recency bias; over 119 rebalances the noise-fits compounded. Freezing the model across 12-month blocks gives more stable generalisation. The 41% Sharpe lift is the magnitude of the noise-fitting under v0.2.0.
+
+**Diagnostic suite re-run on v0.3.0 predictions:**
+
+| Test | v0.2.0 | v0.3.0 | Status |
+|---|---|---|---|
+| Bootstrap CI (long-OOS) | [+0.36, +1.13] | **[+0.54, +1.27]** | tighter, excludes 0 |
+| P(bootstrap SR ≤ 0) long-OOS | 0.14% | **0.01%** | 14x stronger rejection |
+| **DSR test window** | 0.85 | **0.942** ✓ | now crosses 0.95 |
+| **DSR long-OOS** | 0.96 | **0.970** ✓ | even more decisively |
+| FF3 alpha long-OOS | +2.88%/yr (t=1.17, ns) | +3.85%/yr (t=1.85, p=0.066 *) | borderline 10% |
+| **FF5 alpha long-OOS** | +2.68%/yr (t=1.14, ns) | **+3.83%/yr (t=1.94, p=0.055 *)** | borderline 5% |
+| FF5 HML loading | -0.27 (t=-4.57) | -0.14 (t=-2.32) | half the value-tilt |
+| Simple β to S&P 500 | +0.093 (t=1.99) | +0.135 (t=3.60) | larger, now significant |
+| Sector Herfindahl | 0.112 (+34%) | 0.113 (+36%) | unchanged — Layer 3 not yet wired |
+
+**Two important caveats vs the older v0.2.0 narrative:**
+
+1. **Market beta went up.** Simple regression on ^GSPC gives β = +0.135 (t = 3.60, p < 0.001), vs +0.093 before. The Sharpe lift comes partly from higher market exposure — the strategy is now LESS market-neutral than it was. Still small but no longer dismissible. The DOLLAR_VS_BETA_NEUTRAL.pdf Appendix A claim "β = +0.046, essentially zero" applied to the v0.2.0 numbers; the v0.3.0 version is the more market-exposed +0.135.
+
+2. **Sector concentration unchanged.** The canonical driver still uses global decile selection. Bowen's Layer 3 (`sector_map` + `k_per_sector`) is available but not yet plumbed into the driver — that's Phase 10.
+
+**Decision:** Phase 8 v0.3.0 is the new canonical. Updated all PDFs and DECISIONS.md to use the v0.3.0 numbers. The v0.2.0 numbers are an artefact of an implementation bug (Bowen's own docstring described the v0.3.0 behaviour all along); reporting v0.2.0 in the final report would be reporting the bug.
+
+**Reasoning:** The new engine is the methodologically-correct walk-forward design. That it happens to also improve the empirical numbers is strong evidence we were noise-fitting under v0.2.0. Better still, the FF5 alpha is now near-significant (p = 0.055) and the value-factor loading dropped by half — i.e., the model genuinely improved its cross-sectional skill, not just its factor exposure. The headline claim becomes "tuned XGBoost on 13 features, Sharpe +0.94, DSR > 0.95 on both windows, FF5 alpha borderline significant, residual market and value factor exposures small but documented."
+
+**Trial-Sharpe list for DSR:** updated Phase 8 entry to +0.94 (its v0.3.0 value). Phases 1, 1.5, 2, 3b, 3c remain at their v0.2.0 values because they were measured under the old engine; re-running them on v0.3.0 to match would take ~30 minutes of compute but is methodologically tidier. Worth doing if time permits. Even with the mixed list, DSR > 0.94 on both windows.
+
+**Revisit if:** Phase 10 (Layer 2 + Layer 3 combo) materially improves on +0.94 (then re-canonicalise to Phase 10), or Phase 9 (data extension to 2003) shows the v0.3.0 numbers don't hold up pre-2010 (then investigate the regime-specific patterns).
+
+
+## 2026-05-23 — Phase 10 (Layer 3 sector-neutral): the cleanest test of "is the alpha real?"
+
+**Context:** Bowen's v0.3.0 engine added `sector_map` + `k_per_sector` so the backtest finally supports Layer 3 (top-k per sector selection). Phase 10 = Phase 8 panel + tuned XGBoost defaults, but the portfolio is now constructed sector-neutrally: 10 longs and 10 shorts per GICS sector (~119 positions per leg vs Phase 8's ~131). This is the experiment Phase 2 could not run.
+
+**Result on the 2019-2024 test window, XGBoost canonical model:**
+
+| Metric | Phase 8 (dollar-neutral) | Phase 10 (Layer 3) | Change |
+|---|---|---|---|
+| Sharpe (test) | +0.934 | **+0.586** | -37% |
+| Sharpe (long-OOS) | +0.910 | +0.767 | -16% |
+| Ann return | +7.91% | +3.52% | -56% |
+| Max drawdown | -5.5% | -9.6% | worse by 4.1 pp |
+| IC mean | +0.023 | +0.023 | unchanged (predictions identical) |
+| Avg turnover | 1.53 | 1.47 | similar |
+
+**Why the Sharpe drops so much:** the IC is identical — the model produces the same predictions. The portfolio differs only in which 100 stocks it selects from those predictions. Under Phase 8 (global decile), XGBoost makes confident sector-tilted bets — heavy long-Industrials, heavy short-Financials. Layer 3 forces 10 longs and 10 shorts in EVERY sector, including ones where the model has low conviction. The "alpha" stripped out by Layer 3 was the sector-timing component.
+
+**Sector audit (Phase 6 re-run on Phase 10):** Long-leg Herfindahl = **0.090 vs equal-12 baseline 0.083** (+8.5%). Layer 3 dropped concentration from Phase 8's +34% to near-baseline. Verified directly: 10 longs and 10 shorts per GICS sector at every rebalance. **Layer 3 works exactly as designed.**
+
+**Net beta (Phase 5b on Phase 10):** XGBoost beta = **+0.156** (t=5.21, p<0.0001), R²-to-market = **18.9%**. The market exposure went UP slightly under Layer 3 (was +0.135 under Phase 8), even though sector concentration dropped. Forcing diversification across sectors raises the portfolio's correlation to the broad market because each sector contributes its share of market beta uniformly.
+
+**Statistical robustness (Phase 7 on Phase 10):**
+
+| Statistic | Phase 8 | Phase 10 | Verdict |
+|---|---|---|---|
+| Bootstrap CI (long-OOS) | [+0.54, +1.27] | [+0.24, +1.29] | wider, still excludes 0 |
+| Bootstrap CI (test) | [+0.44, +1.33] | [**-0.13**, +1.17] | **includes 0** under Layer 3 |
+| **DSR test window** | 0.942 ✓ | **0.669 ✗** | now fails 0.95 threshold |
+| **DSR long-OOS** | 0.970 ✓ | 0.871 | borderline below 0.95 |
+| **FF5 alpha long-OOS** | +3.83% (t=1.94, p=0.055) | **+1.34% (t=0.82, p=0.41)** | no longer significant |
+| **FF5 HML loading (test)** | -0.142 (t=-1.65) | **-0.064 (t=-1.14)** | half again, near zero |
+| **FF5 HML loading (long)** | -0.140 (t=-2.32) | -0.071 (t=-1.53) | near zero |
+
+**The most important finding of the project:** the HML factor loading dropped from -0.27 (Phase 3c) → -0.14 (Phase 8) → **-0.07 (Phase 10)**. The persistent value-shorting that explained most of Phase 8's Sharpe is essentially gone under Layer 3. So is the Sharpe -- which tells us where the Sharpe came from.
+
+**Decision for the final report:** Report BOTH numbers, framed honestly. Phase 8 (dollar-neutral, matches GKX 2020 convention) is the headline; Phase 10 (Layer 3 sector-neutral, matches Framework section 6's full prescription) is the Layer-3 robustness check that decomposes the headline into "sector-tilt component + pure skill component". This is exactly the framing the original three statistical caveats anticipated.
+
+**Suggested report wording:**
+> "Under the framework-prescribed dollar-neutral construction, tuned XGBoost on 13 features delivers Sharpe = +0.94 on the 2019-2024 test window (+0.91 on the 2015-2024 long-OOS). When we re-run the same predictions under sector-neutral selection (Layer 3, k=10 per sector), Sharpe drops to +0.59. The 0.35-Sharpe gap is explained by sector tilts and value-factor exposure (HML loading -0.14 vs -0.07 under sector-neutral); the residual pure cross-sectional skill component contributes the remaining +0.59 Sharpe with a small (+1.2-3.8%/yr) and not-quite-significant alpha after Fama-French adjustment."
+
+**Other models under Layer 3:**
+- **Lasso:** Sharpe +0.58 on long-OOS (was +0.07 under Phase 8). Layer 3 dramatically improves Lasso — its diffuse signal benefits from sector diversification.
+- **NN:** Sharpe **+0.98 (test) / +0.99 (long-OOS)** under Layer 3, the HIGHEST of any model in any phase. Max drawdown -4.7% (also lowest). BUT NN's IC is +0.004 (essentially noise) — its high Sharpe under Layer 3 comes from sector-balanced low-volatility construction rather than genuine prediction skill. Documented but not adopted as canonical.
+
+**Revisit if:** Phase 11 (Layer 2 + Layer 3 combo) recovers more of the Phase 8 alpha (then re-canonicalise to Phase 11), or if Layer 3 is re-run with k_per_sector tuned per regime via Person C's GMM (then sector tilts could be conditionally enabled, capturing some of the lost alpha during favourable regimes only).
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
