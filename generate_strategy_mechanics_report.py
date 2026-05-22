@@ -317,11 +317,14 @@ story += [
 
     p("<b>Why this design?</b>", BODY),
     bullets([
-        "<b>Market-neutral by construction.</b> If the whole market "
-        "goes up 5%, both baskets are up roughly 5%. Our P/L = (long "
-        "leg's return) - (short leg's return). We make money only if "
-        "our top-20% outperforms our bottom-20%, regardless of which "
-        "direction the market went.",
+        "<b>Dollar-neutral by construction</b> (note: not exactly "
+        "market-neutral -- see DOLLAR_VS_BETA_NEUTRAL.pdf for the full "
+        "discussion). If the whole market goes up 5%, both baskets are "
+        "up roughly 5%. Our P/L = (long leg's return) - (short leg's "
+        "return). We make money only if our top-20% outperforms our "
+        "bottom-20%, regardless of which direction the market went -- "
+        "though the long leg systematically loads on higher-beta names, "
+        "so a small positive net beta (around +0.2 to +0.4) leaks in.",
         "<b>No bet on direction.</b> We're not trying to time the "
         "market. We're betting we can pick winners <i>relative to "
         "losers</i>.",

@@ -400,6 +400,31 @@ The model with the highest squared error (XGBoost) is the clear winner on every 
 **Revisit if:** we add an IC-based DM variant (loss = -per-date IC instead of MSE; would likely flip the result), or once Bowen's regime overlay produces materially different model performance per regime (then run DM on regime-conditional subsamples).
 
 
+## 2026-05-22 — Realised net beta is essentially zero (we worried for nothing)
+
+**Context:** The 2026-05-22 dollar-vs-beta-neutral defence assumed the portfolio's net market beta would be in the +0.2 to +0.4 range — the typical figure for factor-strategy decile portfolios in the literature. That worry motivated the "we'll add a beta-neutral sensitivity check later" plan. Phase 5b actually measured it.
+
+**Method:** For each model, regress test-window portfolio returns (Phase 3c, dollar-neutral) on monthly ^GSPC returns: `r_p,t = α + β·r_m,t + ε_t`. Newey-West HAC standard errors with 6 lags. 72 months of data on the 2019-2024 test window.
+
+**Result:** Net beta is small and not statistically different from zero on the canonical portfolio.
+
+| Model | β | HAC SE | t-stat | p-value | Annualised α | R² to market |
+|---|---|---|---|---|---|---|
+| Lasso | -0.005 | 0.054 | -0.09 | 0.93 | +0.22% | 0.000 |
+| **XGBoost** | **+0.046** | 0.040 | +1.15 | 0.25 | **+4.69%** | 0.008 |
+| NN | +0.134 | 0.078 | +1.71 | 0.09 | +0.52% | 0.040 |
+
+Canonical XGBoost: β = +0.046 (not distinguishable from zero), α = +4.69% / year. Market explains 0.8% of return variance. **The strategy is, empirically, market-neutral — we just got there via dollar-neutral construction + Layer-1 sector-relative ranking rather than explicit beta hedging.**
+
+**Why this happened (the post-hoc story):** the Framework's Layer-1 step replaces every raw feature with a within-sector rank in [0, 1]. The 100 longs and 100 shorts therefore distribute roughly evenly across the 11 sectors, with the long basket holding the within-sector winners (typically not the most aggressive high-beta names) and the short basket holding within-sector losers. Sector exposure is balanced by construction; what remains is fine-grained cross-sector stock selection, where the long-vs-short beta gap is much smaller than in a sector-naive top-vs-bottom-decile strategy. Equal-dollar weighting on a sector-balanced book gives us beta-neutral-by-accident.
+
+**Decision:** No beta-neutral sensitivity check needed. The DOLLAR_VS_BETA_NEUTRAL.pdf "what we'd add if we built one" section becomes "we measured it instead and the worry was unfounded." For the final report:
+- Headline number: dollar-neutral, β = +0.05, α = +4.69%, Sharpe = +0.59. All consistent.
+- A short paragraph: "we verified the portfolio's empirical net beta and found it indistinguishable from zero — Layer-1 sector-relative ranking does the beta-hedging work implicitly."
+
+**Revisit if:** an updated feature set (e.g., lag features in Phase 5c) shifts the realised β above +0.15 with a significant t-stat (then add the explicit beta hedge), or if the regime overlay (Person C) creates regime-conditional beta drift (then measure per-regime).
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
