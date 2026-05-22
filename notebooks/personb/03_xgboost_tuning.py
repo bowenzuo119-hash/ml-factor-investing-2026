@@ -45,7 +45,8 @@ VAL_END = pd.Timestamp("2018-12-31")
 N_TRIALS = 60
 TIMEOUT_SEC = 30 * 60  # 30 min hard cap
 
-INCLUDE_FEATURES = ("mom", "rev", "mvol", "ivol", "log_mktcap", "bm", "ep")
+INCLUDE_FEATURES = ("mom", "rev", "mvol", "ivol", "log_mktcap",
+                    "bm", "ep", "dvol")
 
 RESULTS_DIR = (
     Path(__file__).resolve().parents[2] / "results" / "03_xgboost_tuning"

@@ -234,25 +234,25 @@ class XGBoostModel:
 
     def __init__(
         self,
-        n_estimators: int = 150,
+        n_estimators: int = 200,
         max_depth: int = 4,
-        learning_rate: float = 0.015,
-        subsample: float = 0.815,
-        colsample_bytree: float = 0.734,
-        min_child_weight: int = 15,
-        reg_alpha: float = 0.395,
-        reg_lambda: float = 2.852,
+        learning_rate: float = 0.0104,
+        subsample: float = 0.701,
+        colsample_bytree: float = 0.711,
+        min_child_weight: int = 14,
+        reg_alpha: float = 0.444,
+        reg_lambda: float = 3.144,
         random_state: int = 42,
         extra_kwargs: "dict[str, Any] | None" = None,
         target_kind: str = "raw",
     ) -> None:
-        # Defaults below are the Phase-3 Optuna optimum on the 2016-2018
-        # validation window (objective: OOS R^2 vs zero). See
-        # results/03_xgboost_tuning/best_params.json and DECISIONS.md
-        # 2026-05-22 "Tuned XGBoost". The pattern is heavy regularisation:
-        # fewer trees, ~3x slower learning rate, higher min_child_weight,
-        # added L1 / tighter L2 -- consistent with a low-SNR
-        # cross-sectional return-prediction problem.
+        # Defaults are the Phase-3 Optuna optimum re-tuned on the 8-feature
+        # panel (validation window 2016-2018, objective: OOS R^2 vs zero).
+        # See results/03_xgboost_tuning/best_params.json. Pattern is still
+        # heavily-regularised (slow learning, high min_child_weight, both L1
+        # and L2) -- consistent with a low-SNR cross-sectional problem.
+        # 7-feature tune was n_estimators=150, lr=0.015, subsample=0.815;
+        # adding dvol shifted optimum to a slightly bigger / slower model.
         import xgboost as xgb
 
         self.target_kind = _check_target_kind(target_kind)

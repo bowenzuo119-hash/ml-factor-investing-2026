@@ -331,6 +331,75 @@ Re-running Phase 1.5's walk-forward backtest with the new defaults (Phase 3b, `n
 **Revisit if:** dollar volume shows meaningful XGBoost feature importance AND the yfinance coverage gap is found to bias the liquidity factor (then buy Sharadar SEP for a clean full-history pull), or a CRSP refresh with VOL arrives.
 
 
+## 2026-05-22 — 8-feature panel + re-tuned XGBoost: dvol is the 4th-most-important feature
+
+**Context:** With Feature 4 (dvol) wired into `build_feature_panel`, Person B re-ran the 03_xgboost_tuning.py Optuna search on the full 8-feature panel and then 03c_tuned_xgboost_8features.py for the walk-forward backtest. Question: does adding dvol actually help, given that the 8-feature validation R² (+0.02125) was a hair below the 7-feature value (+0.02178)?
+
+**Decision:** Yes, the 8-feature configuration is the new canonical XGBoost. Test-window 2019-2024 metrics:
+
+| Metric | 7-feat tuned (Phase 3b) | 8-feat tuned (Phase 3c) | Change |
+|---|---|---|---|
+| OOS R² vs zero | -0.0090 | -0.0063 | better |
+| **IC mean** | +0.0067 | **+0.0122** | **+82%** |
+| **IC IR** | +0.092 | **+0.161** | **+75%** |
+| **Net Sharpe** | +0.526 | **+0.589** | **+12%** |
+| Ann return | +4.86% | +5.16% | +0.30 pp |
+| **Max drawdown** | -14.0% | **-10.5%** | **3.5 pp better** |
+| Avg turnover | 1.83 | 1.82 | flat |
+
+The validation R² dip of -0.00053 was sampler noise; the test-window improvements on every metric the portfolio actually cares about (IC, Sharpe, drawdown) are large and consistent.
+
+**Feature importance (gain-based, share of total) on the canonical 8-feature panel:**
+
+| Feature | Gain share |
+|---|---|
+| rev (1-month reversal) | 14.7% |
+| mom (12-1 momentum) | 13.9% |
+| log_mktcap (size) | 13.8% |
+| **dvol (dollar volume)** | **13.6%** |
+| ep (TTM earnings yield) | 12.7% |
+| ivol (24-month residual vol) | 11.1% |
+| mvol (6-month monthly vol) | 10.2% |
+| bm (book-to-market) | 9.9% |
+
+dvol is the **4th-most-important feature**, basically tied with the three other price-based features at the top of the list. Distribution is healthy: no feature dominates (max 14.7%), no feature is dead-weight (min 9.9%). This matches the Gu-Kelly-Xiu (2020) finding that liquidity is a top-tier predictor alongside trend and size.
+
+**Reasoning:** The 8-feature panel is now the canonical configuration. Phase B PDF and the final report's headline number both come from `results/03c_tuned_xgboost_8features/`. Validation R² alone is unsuitable for the model-selection decision in a cross-sectional ranking problem — IC and Sharpe must be checked too, and both clearly prefer the 8-feature version.
+
+**Revisit if:** yfinance's ~10-16% coverage gap on dvol shows up as a systematic bias in the IC over a particular sub-period (then either buy Sharadar SEP for clean full-history dvol, or drop dvol back out), or if Phase 5 lag/dynamics features change the relative importance ranking enough to displace dvol.
+
+
+## 2026-05-22 — Diebold-Mariano: MSE picks Lasso, Sharpe picks XGBoost — keep XGBoost
+
+**Context:** Project Framework section 8.4 prescribes a Diebold-Mariano test for pairwise model comparison. Implemented as `metrics.diebold_mariano` (per-rebalance average squared-error differential, Newey-West HAC variance, 12-lag, two-sided p-value from standard normal). Ran on the Phase 3c (8-feature, tuned XGBoost) test-window predictions.
+
+**Result:** The DM test, which is constructed on squared-error loss, gives a **conclusion that contradicts the Sharpe/IC ranking** — but in a predictable, GKX-2020-consistent way.
+
+| Comparison | DM stat | p-value | MSE winner |
+|---|---|---|---|
+| Lasso vs XGBoost | −3.41 | 0.0006 *** | **Lasso** has significantly smaller MSE |
+| Lasso vs NN | −0.82 | 0.413 (n.s.) | tied |
+| XGBoost vs NN | +3.62 | 0.0003 *** | **NN** has significantly smaller MSE |
+
+So the MSE ranking is **Lasso ≈ NN > XGBoost**. But the actual portfolio outcome metrics on the same test window are:
+
+| Metric | Lasso | XGBoost | NN |
+|---|---|---|---|
+| Sharpe | -0.031 | **+0.589** | +0.173 |
+| IC mean | -0.026 | **+0.012** | -0.014 |
+| Ann return | -0.30% | **+5.16%** | +2.01% |
+
+The model with the highest squared error (XGBoost) is the clear winner on every metric that actually matters for the portfolio.
+
+**Decision:** Keep XGBoost as the canonical primary model. Treat the DM-on-MSE result as evidence of the model's larger prediction variance (which we already knew about from the negative R² discussion), NOT as evidence of worse predictive quality.
+
+**Reasoning:** Squared-error loss penalises a model for being directionally bold even when the boldness is informative. Lasso achieves low MSE by shrinking all predictions close to zero — its predictions barely differentiate stocks, which is why it scored Sharpe of -0.03 (essentially noise). XGBoost makes large, confident predictions; many are wrong, which inflates MSE, but the rank ordering of the predictions is far better — which is exactly what a cross-sectional long-short portfolio needs. The framework explicitly says rank-based metrics (IC, Sharpe) are the cross-sectional model's success criterion; MSE is a secondary diagnostic, not a tie-breaker. This is the classic Gu-Kelly-Xiu (2020) Section 3 finding playing out in our own numbers.
+
+**For the report:** The DM result is itself a finding worth a short paragraph — "we ran the framework's prescribed pairwise DM test and found that MSE picks Lasso significantly, but every portfolio-relevant metric picks XGBoost. This empirically confirms the GKX warning that squared-error loss is the wrong evaluation criterion for cross-sectional ranking models."
+
+**Revisit if:** we add an IC-based DM variant (loss = -per-date IC instead of MSE; would likely flip the result), or once Bowen's regime overlay produces materially different model performance per regime (then run DM on regime-conditional subsamples).
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:

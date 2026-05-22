@@ -50,7 +50,8 @@ PHASES = [
     ("01_first_real_backtest", "Phase 1", "5 features, raw target"),
     ("01b_with_value_factors", "Phase 1.5", "+ B/M and E/P (7 features)"),
     ("02_sector_relative_target", "Phase 2", "+ sector-relative target"),
-    ("03b_tuned_xgboost", "Phase 3b", "tuned XGBoost (Optuna)"),
+    ("03b_tuned_xgboost", "Phase 3b", "tuned XGBoost (7 feat)"),
+    ("03c_tuned_xgboost_8features", "Phase 3c", "tuned + dvol (8 feat)"),
 ]
 
 MODELS = ["Lasso", "XGBoost", "NN"]
@@ -61,7 +62,8 @@ PHASE_COLORS = {
     "Phase 1":   "#9CA3AF",  # grey
     "Phase 1.5": "#3B82F6",  # blue
     "Phase 2":   "#10B981",  # green
-    "Phase 3b":  "#DC2626",  # red - the headline tuned-model curve
+    "Phase 3b":  "#DC2626",  # red - tuned XGBoost, 7 features
+    "Phase 3c":  "#7C3AED",  # purple - canonical, tuned + 8 features
 }
 MODEL_LINESTYLES = {"Lasso": ":", "XGBoost": "-", "NN": "--"}
 
@@ -235,7 +237,7 @@ def metric_table(phases_data, metric_keys: list[tuple[str, str, str]]) -> Table:
                     row.append("-")
             rows.append(row)
     t = Table(rows, hAlign="LEFT",
-              colWidths=[4.3 * cm, 2.9 * cm, 2.9 * cm, 2.9 * cm, 2.9 * cm])
+              colWidths=[4.0 * cm, 2.4 * cm, 2.4 * cm, 2.4 * cm, 2.4 * cm, 2.4 * cm])
     style = [
         ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -287,15 +289,16 @@ def main() -> int:
             LEAD,
         ),
         Paragraph(
-            "<b>The headline.</b> Tuned XGBoost with 7 features (Phase 3b) "
-            "is the canonical model for the final report: <b>+0.53 net "
-            "Sharpe</b> on the test window, <b>+4.86% annualised</b>, "
-            "max drawdown <b>-14.0%</b>. Optuna tuning on the 2016-2018 "
-            "validation window cut the (already-small) negative R² by "
-            "67% and improved the drawdown by 2pp at the cost of a 5% "
-            "Sharpe nudge — a strictly better risk profile and the "
-            "academically defensible choice. See Section 5 for the per-"
-            "phase narrative.",
+            "<b>The headline.</b> Tuned XGBoost on the full 8-feature panel "
+            "(Phase 3c) is now the canonical model for the final report: "
+            "<b>+0.59 net Sharpe</b> on the test window, <b>+5.16% "
+            "annualised</b>, max drawdown <b>-10.5%</b>. Adding dvol "
+            "(Bowen's late-arriving Feature 4) lifted IC by 82% and "
+            "Sharpe by 12% over the 7-feature tuned baseline. "
+            "Diebold-Mariano on MSE picks Lasso instead, but the "
+            "result is GKX-consistent evidence that squared-error loss "
+            "is the wrong tie-breaker for cross-sectional ranking models. "
+            "See Section 5 for the per-phase narrative.",
             NOTE,
         ),
     ]

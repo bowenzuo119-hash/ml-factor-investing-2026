@@ -49,6 +49,7 @@ from src.data_loader import (
     SP500_CURRENT_FILE,
     compute_value_factors,
     download_sp500_universe,
+    load_dollar_volume_monthly,
     load_fundamentals,
     load_prices,
     load_prices_spliced,
@@ -404,7 +405,7 @@ def build_feature_panel(
     start: str = "2005-01-01",
     end: str = "2024-12-31",
     include: tuple[str, ...] = ("mom", "rev", "log_mktcap", "mvol", "ivol",
-                                "bm", "ep"),
+                                "bm", "ep", "dvol"),
     sector_rank: bool = True,
 ) -> pd.DataFrame:
     """Build the long-format feature panel the backtest engine expects.
@@ -511,6 +512,21 @@ def build_feature_panel(
                 .reindex(index=returns_wide.index, columns=returns_wide.columns)
             )
 
+    # Dollar volume (Feature 4) from Bowen's load_dollar_volume_monthly
+    # (yfinance daily close x volume, 21-day trailing mean, month-end).
+    # Use log_dollar_volume for ranking -- raw dollar volume is heavily
+    # right-skewed and the sector-relative rank step downstream wants
+    # roughly-symmetric input distributions for stable ranks.
+    if "dvol" in include:
+        dv = load_dollar_volume_monthly(
+            start=start, end=end,
+            universe=tuple(returns_wide.columns),
+        )
+        feature_wide["dvol"] = (
+            dv["log_dollar_volume"].unstack(level="ticker")
+            .reindex(index=returns_wide.index, columns=returns_wide.columns)
+        )
+
     # 4. Stack to long format -----------------------------------------
     long_frames = []
     for name, wide in feature_wide.items():
@@ -546,17 +562,18 @@ def build_feature_panel(
 # --------------------------------------------------------------------------
 
 def daily_dollar_volume(*args, **kwargs):  # noqa: ARG001
-    """BLOCKED. Person A's pipeline produces monthly data only.
+    """Deprecated. Use the ``"dvol"`` key in :func:`build_feature_panel`.
 
-    To implement feature #4 from the spec we would need either:
-      (a) Person A to add a daily-frequency loader (CRSP DSF or yfinance
-          daily), or
-      (b) A monthly proxy like price * shrout (= mktcap) which is just
-          feature #3 again, so not informative as a separate signal.
+    Was a NotImplementedError stub until 2026-05-22, when Person A added
+    ``data_loader.load_dollar_volume_monthly`` (yfinance daily close x
+    volume, 21-day trailing mean, sampled at month-end). The feature is
+    now wired into :func:`build_feature_panel` via the ``"dvol"`` key in
+    the default ``include`` tuple.
     """
     raise NotImplementedError(
-        "Daily dollar volume requires daily data, which the current pipeline "
-        "does not expose. See factors.py module docstring."
+        "daily_dollar_volume() is a deprecated stub. Call "
+        "build_feature_panel(..., include=(..., 'dvol')) instead, or "
+        "import data_loader.load_dollar_volume_monthly directly."
     )
 
 

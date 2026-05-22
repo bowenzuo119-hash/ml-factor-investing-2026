@@ -291,6 +291,97 @@ def information_coefficient(
     return {"ic_mean": mean, "ic_std": std, "ic_ir": ir, "n_dates": len(arr)}
 
 
+def diebold_mariano(
+    pred_a: pd.Series,
+    pred_b: pd.Series,
+    y_true: pd.Series,
+    *,
+    newey_west_lags: int = 12,
+) -> dict[str, float]:
+    """Adapted Diebold-Mariano test comparing two model forecasts.
+
+    Implements the cross-sectional variant from Gu-Kelly-Xiu (2020),
+    section 2.6: at each rebalance date t, average the per-stock squared
+    forecast errors across the cross-section to get a single scalar per
+    period; the loss differential ``d_t = mse_a,t - mse_b,t`` is then a
+    plain univariate time series whose mean is tested for being zero.
+    This avoids the serial-and-cross-section dependence issue you get if
+    you naively run DM on the flat (stock, date) panel.
+
+    The variance of ``d_bar`` is estimated with a Newey-West HAC
+    correction (Bartlett kernel) to allow for monthly serial correlation
+    in the loss differential. Two-sided p-value from a standard normal.
+
+    Parameters
+    ----------
+    pred_a, pred_b : pd.Series
+        Forecasts from the two models, both indexed by (date, ticker).
+    y_true : pd.Series
+        Realised next-period returns, same index.
+    newey_west_lags : int, default 12
+        Maximum lag for the HAC variance. 12 is the conventional choice
+        for monthly data with possible annual seasonality.
+
+    Returns
+    -------
+    dict
+        Keys:
+        - ``dm_stat`` : standardised loss differential. Negative means
+          model A has a SMALLER mean squared error (model A is better).
+        - ``p_value`` : two-sided p-value from the standard normal.
+        - ``mean_diff`` : raw ``d_bar``. Negative means A wins on MSE.
+        - ``n_dates`` : number of rebalance dates that contributed.
+    """
+    joint = pd.concat(
+        [pred_a.rename("a"), pred_b.rename("b"), y_true.rename("y")],
+        axis=1, join="inner",
+    ).dropna()
+    if joint.empty:
+        return {"dm_stat": float("nan"), "p_value": float("nan"),
+                "mean_diff": float("nan"), "n_dates": 0}
+
+    date_level = joint.index.names[0]
+    err_a_sq = (joint["y"] - joint["a"]) ** 2
+    err_b_sq = (joint["y"] - joint["b"]) ** 2
+    d_t = (err_a_sq - err_b_sq).groupby(level=date_level).mean().sort_index()
+
+    T = len(d_t)
+    if T < 2:
+        return {"dm_stat": float("nan"), "p_value": float("nan"),
+                "mean_diff": float(d_t.mean()) if T else float("nan"),
+                "n_dates": int(T)}
+
+    d_bar = float(d_t.mean())
+    d_centered = (d_t - d_bar).to_numpy()
+
+    # Newey-West HAC: gamma_0 + 2 * sum_{k=1..L} (1 - k/(L+1)) * gamma_k
+    gamma_0 = float((d_centered * d_centered).mean())
+    hac_var = gamma_0
+    L = min(newey_west_lags, T - 1)
+    for k in range(1, L + 1):
+        gamma_k = float(
+            (d_centered[k:] * d_centered[:-k]).mean()
+        )
+        weight = 1.0 - k / (L + 1)
+        hac_var += 2.0 * weight * gamma_k
+    hac_var = max(hac_var, 1e-300)  # guard against negative/zero HAC
+
+    se = float(np.sqrt(hac_var / T))
+    dm_stat = d_bar / se if se > 0 else 0.0
+
+    # Two-sided p-value from standard normal. scipy.stats kept out of
+    # the top-level import so metrics.py stays cheap.
+    from scipy.stats import norm
+    p_value = float(2.0 * (1.0 - norm.cdf(abs(dm_stat))))
+
+    return {
+        "dm_stat": float(dm_stat),
+        "p_value": p_value,
+        "mean_diff": d_bar,
+        "n_dates": int(T),
+    }
+
+
 def summary_stats(
     returns: pd.Series,
     *,
