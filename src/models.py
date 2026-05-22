@@ -61,6 +61,66 @@ def _impute_apply(X: pd.DataFrame, medians: pd.Series) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------
+# Layer-2 helper: sector-relative target
+# --------------------------------------------------------------------------
+
+_VALID_TARGET_KINDS: tuple[str, ...] = ("raw", "sector_relative")
+
+
+def _check_target_kind(target_kind: str) -> str:
+    if target_kind not in _VALID_TARGET_KINDS:
+        raise ValueError(
+            f"target_kind must be one of {_VALID_TARGET_KINDS}, "
+            f"got {target_kind!r}"
+        )
+    return target_kind
+
+
+def _demean_y_by_sector_date(y: pd.Series, X: pd.DataFrame) -> pd.Series:
+    """Subtract per-(date, sector) mean from y for the Layer-2 target.
+
+    Implements Project Framework section 3.2 Layer 2: predict excess
+    return over sector mean instead of raw return. The learning
+    objective becomes sector-neutral by construction.
+
+    Requirements:
+      * X must carry a ``"sector"`` column (the feature panel produced by
+        :func:`factors.build_feature_panel` does so by default; the
+        notebook must NOT drop it before passing features to the engine).
+      * X must have a (date, asset) MultiIndex (the date level is what
+        the engine uses for the cross-section alignment).
+
+    Parameters
+    ----------
+    y : pd.Series
+        Raw next-period returns, indexed like X.
+    X : pd.DataFrame
+        Feature panel including 'sector' column.
+
+    Returns
+    -------
+    pd.Series
+        Same index as y, values = y - mean_over_(date, sector)(y).
+    """
+    if "sector" not in X.columns:
+        raise ValueError(
+            "target_kind='sector_relative' requires a 'sector' column in "
+            "features. Call build_feature_panel(...) with the default "
+            "sector_rank=True and do NOT drop 'sector' before passing X "
+            "to the model."
+        )
+    if not isinstance(X.index, pd.MultiIndex) or len(X.index.names) < 2:
+        raise ValueError(
+            "target_kind='sector_relative' requires X to have a "
+            "(date, asset) MultiIndex."
+        )
+    date = X.index.get_level_values(0)
+    sector = X["sector"].to_numpy()
+    sector_date_mean = y.groupby([date, sector]).transform("mean")
+    return y - sector_date_mean
+
+
+# --------------------------------------------------------------------------
 # 1. Lasso baseline
 # --------------------------------------------------------------------------
 
@@ -84,6 +144,10 @@ class LassoModel:
         WITHIN a date. (Walk-forward is enforced at the OUTER loop by
         the backtest engine, not inside the model.)
     random_state : int, default 42
+    target_kind : {"raw", "sector_relative"}, default "raw"
+        ``"raw"``: train on next-period return directly. ``"sector_relative"``:
+        train on next-period return minus the per-(date, sector) mean
+        (Framework section 3.2 Layer 2). Requires a 'sector' column on X.
     """
 
     def __init__(
@@ -91,10 +155,12 @@ class LassoModel:
         alphas: "list[float] | None" = None,
         cv: int = 5,
         random_state: int = 42,
+        target_kind: str = "raw",
     ) -> None:
         from sklearn.linear_model import LassoCV
         from sklearn.preprocessing import StandardScaler
 
+        self.target_kind = _check_target_kind(target_kind)
         self._scaler = StandardScaler()
         self._lasso = LassoCV(
             alphas=alphas if alphas is not None else 100,
@@ -107,6 +173,8 @@ class LassoModel:
         self._feature_cols: list[str] | None = None
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> "LassoModel":
+        if self.target_kind == "sector_relative":
+            y = _demean_y_by_sector_date(y, X)
         X_use = _split_X(X)
         X_filled, medians = _impute_train(X_use)
         self._medians = medians
@@ -147,6 +215,10 @@ class XGBoostModel:
     extra_kwargs : dict, optional
         Forwarded to ``xgboost.XGBRegressor``. Use for one-off tuning
         without growing the explicit parameter list.
+    target_kind : {"raw", "sector_relative"}, default "raw"
+        See :class:`LassoModel` for semantics. XGBoost is not scale-
+        sensitive but the loss landscape changes when the target is
+        demeaned; expect a noticeable IC shift either way.
     """
 
     def __init__(
@@ -158,9 +230,11 @@ class XGBoostModel:
         colsample_bytree: float = 0.8,
         random_state: int = 42,
         extra_kwargs: "dict[str, Any] | None" = None,
+        target_kind: str = "raw",
     ) -> None:
         import xgboost as xgb
 
+        self.target_kind = _check_target_kind(target_kind)
         self._xgb = xgb.XGBRegressor(
             n_estimators=n_estimators,
             max_depth=max_depth,
@@ -175,6 +249,8 @@ class XGBoostModel:
         self._feature_cols: list[str] | None = None
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> "XGBoostModel":
+        if self.target_kind == "sector_relative":
+            y = _demean_y_by_sector_date(y, X)
         X_use = _split_X(X)
         self._feature_cols = list(X_use.columns)
         self._xgb.fit(X_use.to_numpy(), y.to_numpy())
@@ -223,6 +299,8 @@ class NNModel:
     patience : int, default 10
         Early-stopping patience on the val slice.
     random_state : int, default 42
+    target_kind : {"raw", "sector_relative"}, default "raw"
+        See :class:`LassoModel` for semantics.
     """
 
     def __init__(
@@ -236,7 +314,9 @@ class NNModel:
         max_epochs: int = 100,
         patience: int = 10,
         random_state: int = 42,
+        target_kind: str = "raw",
     ) -> None:
+        self.target_kind = _check_target_kind(target_kind)
         self.hidden_dim = hidden_dim
         self.n_layers = n_layers
         self.dropout = dropout
@@ -282,6 +362,8 @@ class NNModel:
         #     wall-clock cost on a panel this size.
         torch.set_num_threads(1)
 
+        if self.target_kind == "sector_relative":
+            y = _demean_y_by_sector_date(y, X)
         X_use = _split_X(X)
         X_filled, medians = _impute_train(X_use)
         self._medians = medians
