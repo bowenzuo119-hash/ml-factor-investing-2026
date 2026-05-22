@@ -577,60 +577,66 @@ def load_value_factors_monthly(
 ) -> pd.DataFrame:
     """B/M and E/P (TTM) forward-filled to monthly rebalance dates.
 
-    Sources point-in-time quarterly fundamentals from Sharadar SF1 via
-    :func:`data_loader.load_fundamentals` (dimension ``"ARQ"``), then:
+    Sources point-in-time fundamentals from Sharadar SF1 via
+    :func:`data_loader.load_fundamentals` using two dimensions:
 
-    1. Within each ticker, sums the trailing four quarters of ``netinc``
-       to get TTM earnings (a single quarter's E/P is ~4x noisier than
-       TTM; the Framework's Fama-French heritage uses TTM).
-    2. Forward-fills B/M and E/P_TTM from each filing's ``datekey``
-       (publication date) onto ``target_dates`` via ``merge_asof``
-       (direction='backward'). This is the only join key that respects
-       look-ahead: filings post 30-90 days after period end, and
-       ``datekey`` is the day the SEC made them public.
-    3. Returns one row per (target_date, ticker) for tickers present in
-       Sharadar's universe.
+    * ``ARQ`` (As-Reported Quarterly) for **B/M**: ``equity`` is a
+      balance-sheet snapshot (stock variable), same under ARQ and ART.
+      Vendor cross-check: B/M from ARQ matches Sharadar's own ``1/pb``
+      to 4+ decimals (DECISIONS 2026-05-22, Bowen's validation).
+    * ``ART`` (As-Reported Trailing-Twelve-Months) for **E/P**:
+      ``netinc`` under ART is the TTM sum Sharadar computes; matches
+      vendor ``1/pe`` to 5-6 decimals. ARQ.netinc is single-quarter
+      and would understate E/P by ~4x without a rolling sum -- and even
+      a manual 4-quarter rolling sum loses alignment around fiscal year
+      ends. Cleaner to let Sharadar do it.
+
+    For each (target_date, ticker), the value is the most recent filing
+    available as of ``target_date``, joined on ``datekey`` (publication
+    date) via ``pd.merge_asof(direction='backward')``. Filings older
+    than 270 days are dropped so a delisted stock doesn't carry a stale
+    value forward indefinitely.
 
     Parameters
     ----------
     start, end : str
-        ISO date window. Pull a buffer of ~3 months before ``start`` to
-        ensure the first target_date has 4 prior quarters available;
-        callers can pass ``start`` equal to their backtest start.
+        ISO date window. A 15-month buffer is added before ``start``
+        internally so the earliest target_date has prior filings to use.
     tickers : sequence of str
-        Yahoo/CRSP-style tickers. Sharadar uses the same convention with
-        some exceptions (e.g., share-class suffixes); tickers absent from
-        Sharadar are silently dropped.
+        Tickers to pull. Sharadar's universe coverage is ~90% of the
+        2005-2024 S&P 500 union; renamed/acquired tickers (ANTM→ELV,
+        ABC→COR, ...) only resolve under the current symbol.
     target_dates : pd.DatetimeIndex
-        The month-end dates the feature panel uses. Each (target_date,
-        ticker) row will carry the most-recent filing as of that date.
+        Month-end dates the feature panel uses.
 
     Returns
     -------
     pd.DataFrame
-        Long-format with ``(date, ticker)`` MultiIndex (matching the
-        rest of the feature stack) and columns ``["bm", "ep_ttm"]``.
-        Tickers/dates without a prior-12-month filing have NaN.
+        ``(date, ticker)`` MultiIndex, columns ``["bm", "ep_ttm"]``.
+        Tickers/dates without a recent filing have NaN.
 
     Notes
     -----
-    * B/M and E/P_TTM are still raw here -- sector-relative ranks happen
-      in :func:`build_feature_panel`'s post-processing step.
-    * The Sharadar cache (``data/processed/sharadar_sf1_ARQ.parquet``)
-      grows the union of every ticker / date window ever fetched, so the
-      second call onwards is served from disk without hitting the API.
+    Two Sharadar caches are touched (``sharadar_sf1_ARQ.parquet`` and
+    ``sharadar_sf1_ART.parquet``); both are pre-populated for the
+    2005-2024 S&P union by ``notebooks/persona/pull_fundamentals.py``
+    (DECISIONS 2026-05-22 implementation note).
     """
     tickers_t = tuple(tickers)
-    # Pull a 12-month buffer before `start` so we have prior quarters
-    # available for TTM computation at the earliest target_date.
     buffer_start = (
         pd.Timestamp(start) - pd.DateOffset(months=15)
     ).strftime("%Y-%m-%d")
 
-    fund = load_fundamentals(
+    # ARQ for B/M (equity / marketcap)
+    arq = load_fundamentals(
         tickers=tickers_t, start=buffer_start, end=end, dimension="ARQ",
     )
-    if fund.empty:
+    # ART for E/P (TTM netinc / marketcap)
+    art = load_fundamentals(
+        tickers=tickers_t, start=buffer_start, end=end, dimension="ART",
+    )
+
+    if arq.empty and art.empty:
         return pd.DataFrame(
             index=pd.MultiIndex.from_arrays(
                 [[], []], names=["date", "ticker"]
@@ -638,49 +644,45 @@ def load_value_factors_monthly(
             columns=["bm", "ep_ttm"], dtype=float,
         )
 
-    # Drop rows that are missing the inputs we need to avoid pollute
-    # forward-filled cells with NaN values from a temporary gap.
-    needed = ["equity", "netinc", "marketcap"]
-    fund_clean = fund.dropna(subset=needed).copy()
-    fund_clean = fund_clean.sort_index()
+    def _compute_ratio(frame: pd.DataFrame, numerator: str) -> pd.DataFrame:
+        """Compute numerator / marketcap, clean, return (datekey, ticker, value)."""
+        df = frame.dropna(subset=[numerator, "marketcap"]).copy()
+        mcap = df["marketcap"].where(df["marketcap"] > 0)
+        df["_ratio"] = df[numerator] / mcap
+        # Keep latest filing per (datekey, ticker) -- Sharadar occasionally
+        # publishes amendments with the same datekey.
+        df = df.sort_index()
+        return (
+            df[["_ratio"]]
+            .reset_index()
+            .rename(columns={"datekey": "date"})
+            .drop_duplicates(subset=["date", "ticker"], keep="last")
+            .sort_values("date")
+        )
 
-    # Trailing-4-quarter sum of netinc per ticker (TTM earnings).
-    # We use a 4-row rolling sum on the sorted-by-datekey panel.
-    # min_periods=4 keeps the first 3 quarters NaN (insufficient history).
-    fund_clean["netinc_ttm"] = (
-        fund_clean.groupby(level="ticker")["netinc"]
-        .transform(lambda s: s.rolling(window=4, min_periods=4).sum())
-    )
+    bm_long = _compute_ratio(arq, "equity").rename(columns={"_ratio": "bm"})
+    ep_long = _compute_ratio(art, "netinc").rename(columns={"_ratio": "ep_ttm"})
 
-    mcap = fund_clean["marketcap"].where(fund_clean["marketcap"] > 0)
-    fund_clean["bm"] = fund_clean["equity"] / mcap
-    fund_clean["ep_ttm"] = fund_clean["netinc_ttm"] / mcap
-
-    # Forward-fill onto target_dates using merge_asof backward join.
-    # merge_asof requires both sides sorted on the join key.
-    target_grid = pd.MultiIndex.from_product(
-        [target_dates, tickers_t], names=["date", "ticker"]
-    ).to_frame(index=False)
-    target_grid = target_grid.sort_values("date")
-
-    fund_flat = (
-        fund_clean[["bm", "ep_ttm"]]
-        .reset_index()
-        .rename(columns={"datekey": "date"})
+    # Forward-fill onto target_dates via merge_asof, per-ticker via `by`.
+    target_grid = (
+        pd.MultiIndex.from_product(
+            [target_dates, tickers_t], names=["date", "ticker"]
+        )
+        .to_frame(index=False)
         .sort_values("date")
     )
 
-    # Per-ticker merge_asof (pandas does this via `by` argument).
-    merged = pd.merge_asof(
-        target_grid, fund_flat,
-        on="date", by="ticker",
-        direction="backward",
-        # Don't pull in filings older than ~9 months -- a stock with no
-        # filing in the last 3 quarters is probably delisted or untracked.
-        tolerance=pd.Timedelta(days=270),
-    )
+    out = target_grid.copy()
+    for src, col in [(bm_long, "bm"), (ep_long, "ep_ttm")]:
+        merged = pd.merge_asof(
+            target_grid, src,
+            on="date", by="ticker",
+            direction="backward",
+            tolerance=pd.Timedelta(days=270),
+        )
+        out[col] = merged[col].to_numpy()
 
-    return merged.set_index(["date", "ticker"]).sort_index()
+    return out.set_index(["date", "ticker"]).sort_index()
 
 
 # Backward-compat stubs kept as deprecation pointers. Callers should use
