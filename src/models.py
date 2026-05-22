@@ -206,11 +206,22 @@ class XGBoostModel:
 
     Parameters
     ----------
-    n_estimators : int, default 300
+    n_estimators : int, default 150
+        Phase-3 Optuna optimum. Half the textbook default (300); the
+        tuner converged on a smaller-but-more-regularised forest.
     max_depth : int, default 4
-    learning_rate : float, default 0.05
-    subsample : float, default 0.8
-    colsample_bytree : float, default 0.8
+    learning_rate : float, default 0.015
+        Phase-3 optimum. Slow learning rate; lets the regularisation work.
+    subsample : float, default 0.815
+    colsample_bytree : float, default 0.734
+    min_child_weight : int, default 15
+        Phase-3 optimum. Higher than the textbook default of 1; cuts
+        overfitting on small leaf subsamples.
+    reg_alpha : float, default 0.395
+        Phase-3 optimum. L1 regularisation on the leaf weights.
+    reg_lambda : float, default 2.852
+        Phase-3 optimum. L2 regularisation; tighter than the
+        textbook default of 1.0.
     random_state : int, default 42
     extra_kwargs : dict, optional
         Forwarded to ``xgboost.XGBRegressor``. Use for one-off tuning
@@ -223,15 +234,25 @@ class XGBoostModel:
 
     def __init__(
         self,
-        n_estimators: int = 300,
+        n_estimators: int = 150,
         max_depth: int = 4,
-        learning_rate: float = 0.05,
-        subsample: float = 0.8,
-        colsample_bytree: float = 0.8,
+        learning_rate: float = 0.015,
+        subsample: float = 0.815,
+        colsample_bytree: float = 0.734,
+        min_child_weight: int = 15,
+        reg_alpha: float = 0.395,
+        reg_lambda: float = 2.852,
         random_state: int = 42,
         extra_kwargs: "dict[str, Any] | None" = None,
         target_kind: str = "raw",
     ) -> None:
+        # Defaults below are the Phase-3 Optuna optimum on the 2016-2018
+        # validation window (objective: OOS R^2 vs zero). See
+        # results/03_xgboost_tuning/best_params.json and DECISIONS.md
+        # 2026-05-22 "Tuned XGBoost". The pattern is heavy regularisation:
+        # fewer trees, ~3x slower learning rate, higher min_child_weight,
+        # added L1 / tighter L2 -- consistent with a low-SNR
+        # cross-sectional return-prediction problem.
         import xgboost as xgb
 
         self.target_kind = _check_target_kind(target_kind)
@@ -241,6 +262,9 @@ class XGBoostModel:
             learning_rate=learning_rate,
             subsample=subsample,
             colsample_bytree=colsample_bytree,
+            min_child_weight=min_child_weight,
+            reg_alpha=reg_alpha,
+            reg_lambda=reg_lambda,
             tree_method="hist",
             random_state=random_state,
             n_jobs=1,  # safer on macOS; bump if training time becomes a bottleneck

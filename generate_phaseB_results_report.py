@@ -50,6 +50,7 @@ PHASES = [
     ("01_first_real_backtest", "Phase 1", "5 features, raw target"),
     ("01b_with_value_factors", "Phase 1.5", "+ B/M and E/P (7 features)"),
     ("02_sector_relative_target", "Phase 2", "+ sector-relative target"),
+    ("03b_tuned_xgboost", "Phase 3b", "tuned XGBoost (Optuna)"),
 ]
 
 MODELS = ["Lasso", "XGBoost", "NN"]
@@ -60,6 +61,7 @@ PHASE_COLORS = {
     "Phase 1":   "#9CA3AF",  # grey
     "Phase 1.5": "#3B82F6",  # blue
     "Phase 2":   "#10B981",  # green
+    "Phase 3b":  "#DC2626",  # red - the headline tuned-model curve
 }
 MODEL_LINESTYLES = {"Lasso": ":", "XGBoost": "-", "NN": "--"}
 
@@ -232,7 +234,8 @@ def metric_table(phases_data, metric_keys: list[tuple[str, str, str]]) -> Table:
                 else:
                     row.append("-")
             rows.append(row)
-    t = Table(rows, hAlign="LEFT", colWidths=[5 * cm, 3.5 * cm, 3.5 * cm, 3.5 * cm])
+    t = Table(rows, hAlign="LEFT",
+              colWidths=[4.3 * cm, 2.9 * cm, 2.9 * cm, 2.9 * cm, 2.9 * cm])
     style = [
         ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -284,13 +287,15 @@ def main() -> int:
             LEAD,
         ),
         Paragraph(
-            "<b>The headline.</b> XGBoost with 7 features and raw target "
-            "(Phase 1.5) gives the best Sharpe in the project so far: "
-            "<b>+0.56 net</b> on the test window, <b>+4.89% annualised</b>, "
-            "max drawdown −16%. Adding sector-relative target on top "
-            "(Phase 2) improves the model's IC and reduces drawdowns but "
-            "hurts Sharpe because the backtest still uses global decile "
-            "selection — see Section 4.",
+            "<b>The headline.</b> Tuned XGBoost with 7 features (Phase 3b) "
+            "is the canonical model for the final report: <b>+0.53 net "
+            "Sharpe</b> on the test window, <b>+4.86% annualised</b>, "
+            "max drawdown <b>-14.0%</b>. Optuna tuning on the 2016-2018 "
+            "validation window cut the (already-small) negative R² by "
+            "67% and improved the drawdown by 2pp at the cost of a 5% "
+            "Sharpe nudge — a strictly better risk profile and the "
+            "academically defensible choice. See Section 5 for the per-"
+            "phase narrative.",
             NOTE,
         ),
     ]

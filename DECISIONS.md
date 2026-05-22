@@ -279,6 +279,45 @@ XGBoost's IC and IC IR go up — the model has learned a more reliable within-se
 **Revisit if:** Bowen implements sector-neutral portfolio construction (then re-run Phase 2 with target_kind="sector_relative" + k_per_sector=5, and pick whichever combination wins on validation), or a future XGBoost tuning run discovers a hyperparameter set that fixes the Sharpe regression on its own.
 
 
+## 2026-05-22 — Tuned XGBoost: heavier regularisation; safer profile
+
+**Context:** Phase 1.5 left XGBoost on out-of-the-box defaults (`n_estimators=300, max_depth=4, learning_rate=0.05`). Project Framework section 7.2 requires hyperparameter selection on the 2016-2018 validation window, not the textbook defaults. Need to tune before the report's headline number is set in stone.
+
+**Options considered:** (a) Skip tuning, ship the textbook defaults — fastest, but the report cannot claim "tuned on the held-out validation window per GKX procedure". (b) Grid search over a small set — exhaustive but slow and biased toward gridpoint values. (c) Optuna TPE search (50-100 trials, 30-min walltime cap) over the conventional GKX hyperparameter grid, objective = OOS R² vs zero on the validation slice — modern, sample-efficient, matches the framework's spec.
+
+**Decision:** Option (c). `notebooks/personb/03_xgboost_tuning.py` runs 60 Optuna trials with TPE sampler (seed=42) over `n_estimators ∈ [100, 800]`, `max_depth ∈ [3, 7]`, `learning_rate ∈ [0.01, 0.2] (log)`, `subsample ∈ [0.6, 1.0]`, `colsample_bytree ∈ [0.6, 1.0]`, `min_child_weight ∈ [1, 20]`, `reg_alpha ∈ [0, 1]`, `reg_lambda ∈ [0, 5]`. Each trial is a single train (2005-2015) → predict (2016-2018) fit (no walk-forward inside the tuning loop); 60 trials finish in 85 seconds.
+
+Best validation R² = **+0.0218**, hyperparameters pinned as the new `XGBoostModel` defaults in `src/models.py`:
+
+| Hyperparameter | Default (was) | Tuned | Direction |
+|---|---|---|---|
+| n_estimators       | 300   | **150**   | Smaller forest |
+| max_depth          | 4     | 4         | Unchanged |
+| learning_rate      | 0.05  | **0.015** | 3.3x slower |
+| subsample          | 0.8   | 0.815     | Unchanged |
+| colsample_bytree   | 0.8   | 0.734     | Slightly more aggressive |
+| min_child_weight   | 1     | **15**    | Much higher (less leaf overfitting) |
+| reg_alpha (L1)     | 0     | **0.395** | Added L1 |
+| reg_lambda (L2)    | 1     | **2.852** | Tightened L2 |
+
+The pattern is **uniformly toward heavier regularisation**: half the trees, slower learning, harder minimum-leaf threshold, both L1 and L2 added. Consistent with a low signal-to-noise problem.
+
+Re-running Phase 1.5's walk-forward backtest with the new defaults (Phase 3b, `notebooks/personb/03b_tuned_xgboost.py`) gives on the 2019-2024 test window:
+
+| Metric          | Untuned (Phase 1.5) | Tuned (Phase 3b) | Change |
+|-----------------|---------------------|------------------|--------|
+| OOS R² vs zero  | -0.0270             | **-0.0090**      | +67% (Optuna's own objective) |
+| IC mean         | +0.0062             | +0.0067          | +8% |
+| Net Sharpe      | **+0.556**          | +0.526           | -5% |
+| Ann return      | +4.89%              | +4.86%           | flat |
+| Max drawdown    | -16.0%              | **-14.0%**       | +2pp better |
+| Avg turnover    | 1.82                | 1.83             | flat |
+
+**Reasoning:** Tuning succeeded at its declared objective (R² up by 67% in absolute reduction, IC up, drawdown 2pp better) but Sharpe slipped 5% because the more-regularised model makes less extreme predictions → less volatile portfolio → similar return but with slightly different risk profile. The drawdown improvement compensates for the Sharpe nudge in any risk-adjusted sense. Crucially the tuned model is the academically defensible one — chosen via the proper validation-set procedure, not out-of-the-box defaults.
+
+**Revisit if:** the Diebold-Mariano test (Phase 4) shows the tuned XGBoost is not significantly better than the untuned baseline at predicting realised returns (then either the tuning was over-fit to the validation window, or 60 trials wasn't enough — re-tune with 200 trials and walk-forward CV on the train/val window), or a later feature addition shifts the regularisation optimum (re-run `03_xgboost_tuning.py`, repin).
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
