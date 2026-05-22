@@ -235,24 +235,26 @@ class XGBoostModel:
     def __init__(
         self,
         n_estimators: int = 200,
-        max_depth: int = 4,
-        learning_rate: float = 0.0104,
-        subsample: float = 0.701,
-        colsample_bytree: float = 0.711,
-        min_child_weight: int = 14,
-        reg_alpha: float = 0.444,
-        reg_lambda: float = 3.144,
+        max_depth: int = 3,
+        learning_rate: float = 0.0115,
+        subsample: float = 0.717,
+        colsample_bytree: float = 0.890,
+        min_child_weight: int = 11,
+        reg_alpha: float = 0.794,
+        reg_lambda: float = 2.305,
         random_state: int = 42,
         extra_kwargs: "dict[str, Any] | None" = None,
         target_kind: str = "raw",
     ) -> None:
-        # Defaults are the Phase-3 Optuna optimum re-tuned on the 8-feature
-        # panel (validation window 2016-2018, objective: OOS R^2 vs zero).
-        # See results/03_xgboost_tuning/best_params.json. Pattern is still
-        # heavily-regularised (slow learning, high min_child_weight, both L1
-        # and L2) -- consistent with a low-SNR cross-sectional problem.
-        # 7-feature tune was n_estimators=150, lr=0.015, subsample=0.815;
-        # adding dvol shifted optimum to a slightly bigger / slower model.
+        # Defaults are the Phase-8 Optuna optimum on the 13-feature panel
+        # (validation window 2016-2018, objective: OOS R^2 vs zero).
+        # See results/03_xgboost_tuning/best_params.json. Pattern shifted vs
+        # the 8-feature tune: shallower trees (max_depth 4 -> 3), more
+        # aggressive L1 (reg_alpha 0.44 -> 0.79) so the model uses L1 for
+        # feature selection across the larger feature set; slightly less L2.
+        # Previous 8-feature defaults were: n_estimators=200, max_depth=4,
+        # learning_rate=0.0104, subsample=0.701, colsample_bytree=0.711,
+        # min_child_weight=14, reg_alpha=0.444, reg_lambda=3.144.
         import xgboost as xgb
 
         self.target_kind = _check_target_kind(target_kind)

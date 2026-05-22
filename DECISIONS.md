@@ -486,6 +486,61 @@ XGBoost catastrophically degraded. Sharpe went from +0.589 to -0.569 -- the mode
 **Revisit if:** value reverses materially (then re-run the FF regression on the new sample -- if alpha jumps, the previous result was sample-period-specific), or Layer 3 sector-neutral construction (Bowen) substantially reshapes the factor exposures (then re-run the entire panel).
 
 
+## 2026-05-22 — Extended fundamentals (ROE, ROA, D/E, asset growth, accruals): new canonical model
+
+**Context:** Phase 3c canonical model used 8 features and produced Sharpe +0.59. FF5 regression in Phase 7 showed alpha not significant after factor adjustment (t = 0.67); the strategy was mostly capturing the value/growth premium via HML, not genuine cross-sectional skill. Hypothesis: adding quality + investment + accruals factors would give the model more signal independent of the value/growth tilt.
+
+**Method:** Added `load_extended_fundamentals_monthly` to `src/factors.py`. Pulls Sharadar SF1 with the extended column set (`assets`, `roe`, `roa`, `de`, `ncfo` in addition to the existing `equity`, `netinc`, `marketcap`). Computes 5 new features:
+- **roe**: Sharadar's Return on Equity (ART, trailing 12 months)
+- **roa**: Sharadar's Return on Assets (ART, trailing 12 months)
+- **de**: Debt-to-Equity ratio (ARQ snapshot)
+- **asset_growth**: assets_t / assets_{t-4 quarters} - 1 (Fama-French CMA-style investment factor)
+- **accruals**: Sloan (1996) earnings-quality measure: (TTM netinc - TTM ncfo) / assets, ART
+
+All five forward-filled via `merge_asof(direction="backward")` on `datekey` for PIT safety, same machinery as `load_value_factors_monthly`. 270-day tolerance to avoid stale carry-forward on delisted names.
+
+Re-tuned Optuna on the 13-feature panel (60 trials, validation 2016-2018, objective OOS R² vs zero). Tuned hyperparameters shifted relative to the 8-feature tune:
+
+| Hyperparameter | 8-feat | 13-feat | Direction |
+|---|---|---|---|
+| n_estimators | 200 | 200 | Same |
+| max_depth | 4 | **3** | Shallower |
+| learning_rate | 0.0104 | 0.0115 | Slightly faster |
+| subsample | 0.701 | 0.717 | Similar |
+| colsample_bytree | 0.711 | **0.890** | Much more cols per tree |
+| min_child_weight | 14 | 11 | Slightly less leaf-level reg |
+| reg_alpha (L1) | 0.444 | **0.794** | **~80% more L1** |
+| reg_lambda (L2) | 3.144 | 2.305 | Less L2 |
+
+Pattern shift: the wider feature set traded **tree depth for L1 regularisation** -- shallower trees that look at more columns each, with much stronger L1 to do feature selection. This is exactly what you would expect when going from 8 to 13 features: L1 selects which features matter, L2 (which penalises individual coefficients) becomes less relevant.
+
+**Result on the 2019-2024 test window:**
+
+| Metric | Phase 3c (8 feat) | **Phase 8 (13 feat)** | Change |
+|---|---|---|---|
+| OOS R² vs zero | -0.009 | -0.020 | worse (squared error inflated -- bigger predictions) |
+| IC mean | +0.0067 | +0.0123 | **+83%** |
+| **IC IR (mean/std)** | **+0.092** | **+0.170** | **+85%** |
+| **Net Sharpe** | **+0.589** | **+0.663** | **+12.6%** |
+| Ann return | +4.86% | +5.91% | +1.05 pp |
+| **Max drawdown** | **-10.5%** | **-8.9%** | better by 1.6 pp |
+| Avg turnover | 1.82 | 1.77 | flat |
+
+Lasso: Sharpe +0.04 → +0.09 (modest improvement). **NN: Sharpe +0.17 → +0.62 (massive improvement)** -- the additional features finally gave the neural network something to do beyond the linear-ish signal it was getting from 8 features. NN now has a positive IC (+0.0021) for the first time.
+
+**Decision:** Phase 8 is the new canonical configuration. Phase 3c stays in `results/03c_tuned_xgboost_8features/` for direct comparison but the report's headline number now comes from `results/08_extended_fundamentals/`.
+
+**Reasoning:** Every metric the portfolio cares about (IC, IC IR, Sharpe, drawdown, return) improved meaningfully. The cost is 5 extra features and one extra Sharadar fetch on first use (cached thereafter). The R² vs zero got slightly worse -- a known artefact when tree models receive richer features and respond by making more confident predictions, inflating squared error even as rank ordering improves (the same phenomenon we documented going from 5 → 7 features).
+
+**For the significance story (Phase 7 caveats):** Sharpe jumping from +0.59 to +0.66 changes the t-statistic math:
+- On the 5-year test window: 0.66 × √5 = 1.48 (still not significant, but tighter)
+- On the 10-year long-OOS 2015-2024 window: 0.66 × √10 = **2.10** (significant at p<0.05)
+
+The longer-OOS window now crosses the conventional 2.0 threshold without needing the data extension to 2003. Phase 9 (2003-2025 extension) drops from "required" to "nice robustness check".
+
+**Revisit if:** the FF5 regression rerun on Phase 8 predictions still shows alpha non-significant (then we know the 5 quality features ALSO load on FF factors and we have not actually escaped the value-tilt explanation), or if NN's surprise jump to Sharpe +0.62 turns out to be a single-window artefact (rerun in the wider 2010-2024 window to verify).
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:

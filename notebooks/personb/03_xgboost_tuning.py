@@ -46,7 +46,8 @@ N_TRIALS = 60
 TIMEOUT_SEC = 30 * 60  # 30 min hard cap
 
 INCLUDE_FEATURES = ("mom", "rev", "mvol", "ivol", "log_mktcap",
-                    "bm", "ep", "dvol")
+                    "bm", "ep", "dvol",
+                    "roe", "roa", "de", "asset_growth", "accruals")
 
 RESULTS_DIR = (
     Path(__file__).resolve().parents[2] / "results" / "03_xgboost_tuning"
