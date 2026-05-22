@@ -279,6 +279,19 @@ XGBoost's IC and IC IR go up — the model has learned a more reliable within-se
 **Revisit if:** Bowen implements sector-neutral portfolio construction (then re-run Phase 2 with target_kind="sector_relative" + k_per_sector=5, and pick whichever combination wins on validation), or a future XGBoost tuning run discovers a hyperparameter set that fixes the Sharpe regression on its own.
 
 
+## 2026-05-22 — Dollar volume (Feature 4) from yfinance daily close×volume
+
+**Context:** Person B's feature stack is 7/8 complete; the missing one is Feature 4 (Dollar Volume), which needs `price × volume`. Person A's pipeline has no volume anywhere: the vendor-provided CRSP MSF extract omits the VOL column (header is `PERMNO,date,SICCD,TICKER,COMNAM,CUSIP,PRC,RET,BID,ASK,SHROUT,RETX`), and the Sharadar subscription's SEP (daily prices+volume) table is sample-only (returns data through 2018-12-31, nothing for 2024) while DAILY carries ratios but no volume/price.
+
+**Options considered:** (a) yfinance daily `close × volume`, trailing-21-day mean, sampled at month-ends — free, full window, but inherits yfinance's ~10-16% delisted/renamed coverage gap and is a large daily download. (b) Buy the full Sharadar SEP subscription — cleanest (full history incl. delisted, matches the spec's daily formula) but adds cost and procurement lag for one feature. (c) Re-request a CRSP extract that includes VOL from the TA — same blocked channel that left us without an updated CRSP, no ETA. (d) Drop Feature 4 and ship 7/8 — zero work but deviates from the spec's 8-feature stack.
+
+**Decision:** Option (a). Add `load_dollar_volume_monthly` to `data_loader.py`: chunked yfinance daily download (100/call), `daily_dollar_volume = adj_close × volume` (split-invariant), trailing-`window` (default 21 trading days) mean, sampled at the trading-day month-end. Returns `(date, ticker)` with `dollar_volume` and `log_dollar_volume`, aligned with the price panels. `notebooks/persona/pull_dollar_volume.py` warms the cache for the 2005-2025 S&P 500 union.
+
+**Reasoning:** It's the only free full-window volume source, and dollar volume is internally consistent using yfinance's own price×volume (it does not need to agree with CRSP prices). Validated on 5 large-caps for 2023: AAPL ~$10B/day, NVDA ~$18B/day, JPM ~$1.4B/day — all match reality. The coverage gap is the same one we already accept for yfinance-era prices, so it introduces no new bias category.
+
+**Revisit if:** dollar volume shows meaningful XGBoost feature importance AND the yfinance coverage gap is found to bias the liquidity factor (then buy Sharadar SEP for a clean full-history pull), or a CRSP refresh with VOL arrives.
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
