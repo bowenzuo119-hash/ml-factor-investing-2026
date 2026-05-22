@@ -21,14 +21,18 @@ Layer 2: sector-relative target. Done outside this file (model-side wrapper
 Layer 3: sector-neutral portfolio construction. Owned by Person A in
     `backtest.py` (k_per_sector lever, currently a warn-only stub).
 
-Data-availability reality (2026-05-21)
+Data-availability reality (2026-05-22)
 --------------------------------------
 Person A's pipeline gives MONTHLY observations (CRSP MSF + yfinance
 resampled to month-end), so the daily formulae in
 `documents/Person_A_Feature_Spec.docx` for 21-day volatility, dollar
 volume, and 21-day idiosyncratic volatility cannot be implemented as
-written. Feasible substitutes are documented per-feature below. B/M and
-E/P are blocked entirely pending Compustat (DECISIONS.md 2026-05-13).
+written. Feasible substitutes are documented per-feature below.
+
+B/M and E/P (features 7-8) now sourced from Sharadar SF1 via
+``data_loader.load_fundamentals`` (DECISIONS 2026-05-22). Use
+:func:`load_value_factors_monthly` to get a point-in-time (datekey-aware)
+monthly panel suitable for the feature stack.
 """
 
 from __future__ import annotations
@@ -43,7 +47,9 @@ from src.data_loader import (
     RAW_DIR,
     PROCESSED_DIR,
     SP500_CURRENT_FILE,
+    compute_value_factors,
     download_sp500_universe,
+    load_fundamentals,
     load_prices,
     load_prices_spliced,
 )
@@ -397,7 +403,8 @@ def build_feature_panel(
     *,
     start: str = "2005-01-01",
     end: str = "2024-12-31",
-    include: tuple[str, ...] = ("mom", "rev", "log_mktcap", "mvol", "ivol"),
+    include: tuple[str, ...] = ("mom", "rev", "log_mktcap", "mvol", "ivol",
+                                "bm", "ep"),
     sector_rank: bool = True,
 ) -> pd.DataFrame:
     """Build the long-format feature panel the backtest engine expects.
@@ -485,6 +492,25 @@ def build_feature_panel(
             index=returns_wide.index, columns=returns_wide.columns
         )
 
+    # B/M and E/P_TTM from Sharadar SF1. Loaded once (long-format) then
+    # pivoted to wide format to match the other features' shape.
+    if "bm" in include or "ep" in include:
+        value_factors = load_value_factors_monthly(
+            start=start, end=end,
+            tickers=tuple(returns_wide.columns),
+            target_dates=returns_wide.index,
+        )
+        if "bm" in include:
+            feature_wide["bm"] = (
+                value_factors["bm"].unstack(level="ticker")
+                .reindex(index=returns_wide.index, columns=returns_wide.columns)
+            )
+        if "ep" in include:
+            feature_wide["ep"] = (
+                value_factors["ep_ttm"].unstack(level="ticker")
+                .reindex(index=returns_wide.index, columns=returns_wide.columns)
+            )
+
     # 4. Stack to long format -----------------------------------------
     long_frames = []
     for name, wide in feature_wide.items():
@@ -542,20 +568,138 @@ def daily_volatility_21d(*args, **kwargs):  # noqa: ARG001
     )
 
 
-def book_to_market(*args, **kwargs):  # noqa: ARG001
-    """BLOCKED pending Compustat access.
+def load_value_factors_monthly(
+    *,
+    start: str,
+    end: str,
+    tickers: tuple[str, ...] | list[str],
+    target_dates: pd.DatetimeIndex,
+) -> pd.DataFrame:
+    """B/M and E/P (TTM) forward-filled to monthly rebalance dates.
 
-    See DECISIONS.md 2026-05-13 "Defer fundamentals". CRSP MSF has no
-    book value, no net income, no shares outstanding history that would
-    let us build B/M or E/P. If the TA replies with Compustat access,
-    implement here.
+    Sources point-in-time quarterly fundamentals from Sharadar SF1 via
+    :func:`data_loader.load_fundamentals` (dimension ``"ARQ"``), then:
+
+    1. Within each ticker, sums the trailing four quarters of ``netinc``
+       to get TTM earnings (a single quarter's E/P is ~4x noisier than
+       TTM; the Framework's Fama-French heritage uses TTM).
+    2. Forward-fills B/M and E/P_TTM from each filing's ``datekey``
+       (publication date) onto ``target_dates`` via ``merge_asof``
+       (direction='backward'). This is the only join key that respects
+       look-ahead: filings post 30-90 days after period end, and
+       ``datekey`` is the day the SEC made them public.
+    3. Returns one row per (target_date, ticker) for tickers present in
+       Sharadar's universe.
+
+    Parameters
+    ----------
+    start, end : str
+        ISO date window. Pull a buffer of ~3 months before ``start`` to
+        ensure the first target_date has 4 prior quarters available;
+        callers can pass ``start`` equal to their backtest start.
+    tickers : sequence of str
+        Yahoo/CRSP-style tickers. Sharadar uses the same convention with
+        some exceptions (e.g., share-class suffixes); tickers absent from
+        Sharadar are silently dropped.
+    target_dates : pd.DatetimeIndex
+        The month-end dates the feature panel uses. Each (target_date,
+        ticker) row will carry the most-recent filing as of that date.
+
+    Returns
+    -------
+    pd.DataFrame
+        Long-format with ``(date, ticker)`` MultiIndex (matching the
+        rest of the feature stack) and columns ``["bm", "ep_ttm"]``.
+        Tickers/dates without a prior-12-month filing have NaN.
+
+    Notes
+    -----
+    * B/M and E/P_TTM are still raw here -- sector-relative ranks happen
+      in :func:`build_feature_panel`'s post-processing step.
+    * The Sharadar cache (``data/processed/sharadar_sf1_ARQ.parquet``)
+      grows the union of every ticker / date window ever fetched, so the
+      second call onwards is served from disk without hitting the API.
     """
-    raise NotImplementedError("B/M needs Compustat fundamentals (not available)")
+    tickers_t = tuple(tickers)
+    # Pull a 12-month buffer before `start` so we have prior quarters
+    # available for TTM computation at the earliest target_date.
+    buffer_start = (
+        pd.Timestamp(start) - pd.DateOffset(months=15)
+    ).strftime("%Y-%m-%d")
+
+    fund = load_fundamentals(
+        tickers=tickers_t, start=buffer_start, end=end, dimension="ARQ",
+    )
+    if fund.empty:
+        return pd.DataFrame(
+            index=pd.MultiIndex.from_arrays(
+                [[], []], names=["date", "ticker"]
+            ),
+            columns=["bm", "ep_ttm"], dtype=float,
+        )
+
+    # Drop rows that are missing the inputs we need to avoid pollute
+    # forward-filled cells with NaN values from a temporary gap.
+    needed = ["equity", "netinc", "marketcap"]
+    fund_clean = fund.dropna(subset=needed).copy()
+    fund_clean = fund_clean.sort_index()
+
+    # Trailing-4-quarter sum of netinc per ticker (TTM earnings).
+    # We use a 4-row rolling sum on the sorted-by-datekey panel.
+    # min_periods=4 keeps the first 3 quarters NaN (insufficient history).
+    fund_clean["netinc_ttm"] = (
+        fund_clean.groupby(level="ticker")["netinc"]
+        .transform(lambda s: s.rolling(window=4, min_periods=4).sum())
+    )
+
+    mcap = fund_clean["marketcap"].where(fund_clean["marketcap"] > 0)
+    fund_clean["bm"] = fund_clean["equity"] / mcap
+    fund_clean["ep_ttm"] = fund_clean["netinc_ttm"] / mcap
+
+    # Forward-fill onto target_dates using merge_asof backward join.
+    # merge_asof requires both sides sorted on the join key.
+    target_grid = pd.MultiIndex.from_product(
+        [target_dates, tickers_t], names=["date", "ticker"]
+    ).to_frame(index=False)
+    target_grid = target_grid.sort_values("date")
+
+    fund_flat = (
+        fund_clean[["bm", "ep_ttm"]]
+        .reset_index()
+        .rename(columns={"datekey": "date"})
+        .sort_values("date")
+    )
+
+    # Per-ticker merge_asof (pandas does this via `by` argument).
+    merged = pd.merge_asof(
+        target_grid, fund_flat,
+        on="date", by="ticker",
+        direction="backward",
+        # Don't pull in filings older than ~9 months -- a stock with no
+        # filing in the last 3 quarters is probably delisted or untracked.
+        tolerance=pd.Timedelta(days=270),
+    )
+
+    return merged.set_index(["date", "ticker"]).sort_index()
+
+
+# Backward-compat stubs kept as deprecation pointers. Callers should use
+# `load_value_factors_monthly` directly; these names predated the Sharadar
+# integration.
+def book_to_market(*args, **kwargs):  # noqa: ARG001
+    """Deprecated: use :func:`load_value_factors_monthly` instead."""
+    raise NotImplementedError(
+        "book_to_market() was a pre-Sharadar stub. "
+        "Use load_value_factors_monthly(...) for B/M (and E/P)."
+    )
 
 
 def earnings_to_price(*args, **kwargs):  # noqa: ARG001
-    """BLOCKED pending Compustat access. See `book_to_market`."""
-    raise NotImplementedError("E/P needs Compustat fundamentals (not available)")
+    """Deprecated: use :func:`load_value_factors_monthly` instead."""
+    raise NotImplementedError(
+        "earnings_to_price() was a pre-Sharadar stub. "
+        "Use load_value_factors_monthly(...) for E/P (and B/M)."
+    )
 
 
 # --------------------------------------------------------------------------
