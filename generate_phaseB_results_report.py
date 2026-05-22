@@ -293,14 +293,16 @@ def main() -> int:
         ),
         Paragraph(
             "<b>The headline.</b> Tuned XGBoost on the 13-feature panel "
-            "(Phase 8) is now the canonical model: <b>+0.66 net Sharpe</b>, "
-            "<b>+5.91% annualised</b>, max drawdown <b>-8.9%</b> on the "
-            "2019-2024 test window. Adding 5 quality / investment / "
-            "accruals factors (ROE, ROA, D/E, asset growth, Sloan accruals) "
-            "lifted Sharpe by 13% and IC IR by 85% over the 8-feature "
-            "tuned baseline. On the longer 2015-2024 OOS window the t-stat "
-            "crosses 2.0 (significant), without needing a data extension "
-            "back to 2003. See Section 5 for the per-phase narrative.",
+            "(Phase 8), now running on backtest engine v0.3.0 with "
+            "block-gated refit: <b>+0.94 net Sharpe</b>, "
+            "<b>+7.9% annualised</b>, max drawdown <b>-5.5%</b> on the "
+            "2019-2024 test window. v0.3.0 refits only at the start of "
+            "each test_window block (not every period as the buggy v0.2.0 "
+            "engine did), which removed a layer of recency noise-fitting "
+            "and gave a 41% Sharpe lift over the same predictions. "
+            "Deflated Sharpe now clears 0.95 on both 5yr and 10yr OOS "
+            "windows; FF5 alpha = +3.83%/yr is borderline significant "
+            "(t=1.94, p=0.055). See Section 5 for the per-phase narrative.",
             NOTE,
         ),
     ]

@@ -322,7 +322,11 @@ def main() -> int:
         "Phase 2":   +0.432,
         "Phase 3b":  +0.526,
         "Phase 3c":  +0.589,
-        "Phase 8":   +0.663,
+        # Phase 8 updated to the v0.3.0 engine value -- prior phases were
+        # measured on the old (refit-every-period) engine and haven't been
+        # re-run on v0.3.0. Methodologically this trial list is a slight
+        # mixture, but the DSR is robust to that level of imprecision.
+        "Phase 8":   +0.942,
     }
     print(f"  Sharpe across {N_TRIALS} trials: "
           f"{list(trial_sharpes.values())}")

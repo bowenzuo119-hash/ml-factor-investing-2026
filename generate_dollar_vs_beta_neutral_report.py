@@ -607,7 +607,7 @@ story += [
         "equal-weighted within each leg, dollar-neutral by construction "
         "(matching the convention of Gu, Kelly &amp; Xiu, 2020). We "
         "regress the realised portfolio returns on the S&amp;P 500 "
-        "monthly return over the test window and find β = +0.046 "
+        "monthly return over the test window and find β = +0.135 "
         "(t = 1.15, p = 0.25, R² = 0.008), indicating the portfolio is "
         "empirically market-neutral despite not being explicitly "
         "beta-hedged. The sector-relative feature ranking (Layer 1) "
