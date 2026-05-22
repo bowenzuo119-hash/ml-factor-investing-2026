@@ -448,6 +448,44 @@ XGBoost catastrophically degraded. Sharpe went from +0.589 to -0.569 -- the mode
 **Revisit if:** we get more compute budget for a 200-trial Optuna re-tune on the 24-feature panel, or if a future regime overlay produces feature-importance evidence that lag structure carries time-varying signal.
 
 
+## 2026-05-22 — Statistical robustness checks: Sharpe is real but mostly value-factor exposure
+
+**Context:** A defensible reading of the canonical Phase-3c Sharpe of +0.59 requires (a) a confidence interval on the point estimate, (b) a multiple-testing correction for the 5 model variants we tried, and (c) a factor-adjustment check to see if the Sharpe survives after controlling for known risk premia. Framework section 8.3 explicitly asks for the bootstrap CI; sections 8.2 and 8.4 implicitly call for the factor regression.
+
+**Method:** `notebooks/personb/07_statistical_robustness.py` produces three statistics on the canonical XGBoost portfolio returns:
+
+1. **Block-bootstrap Sharpe CI** -- resample 6-month blocks with replacement, recompute Sharpe, 10,000 iterations.
+2. **Deflated Sharpe (Bailey & Lopez de Prado 2014)** -- adjust the observed Sharpe by the maximum Sharpe expected from N=5 random configurations, given the skewness, kurtosis, and series length.
+3. **Fama-French 3-factor and 5-factor regression** with Newey-West HAC standard errors (6 lags). Excess returns regressed on Mkt-RF, SMB, HML (and RMW, CMA for FF5). Factor data fetched live from Ken French's data library.
+
+**Results on the 2015-2024 long-OOS window (119 months):**
+
+| Statistic | Value | Interpretation |
+|---|---|---|
+| Sharpe observed | +0.60 | headline number |
+| Bootstrap 5-95% CI | [+0.13, +1.01] | distinguishable from 0 |
+| P(bootstrap SR ≤ 0) | 1.9% | < 5% threshold |
+| Deflated Sharpe (DSR) | 0.85 | < 0.95 threshold ⇒ not significant after variant-deflation |
+| FF3 alpha (annualised) | +1.91% (t=0.68, p=0.50) | **NOT significant** |
+| FF5 alpha (annualised) | +1.78% (t=0.67, p=0.51) | **NOT significant** |
+| FF5 HML loading | -0.27 (t=-4.15, p<0.001) | strongly short value |
+| FF5 Mkt-RF loading | +0.10 (t=2.80, p=0.006) | small but significant net-long market |
+
+**The headline narrative shifts:** the +0.59 Sharpe IS statistically distinguishable from zero by the framework's preferred bootstrap test, but it does NOT survive (a) adjustment for the 5 variants we tested, nor (b) controlling for known factor premia. After removing Fama-French exposure, the residual alpha is ~+2% per year and the t-stat is below 0.7 in every spec.
+
+**What the model is actually doing:** the dominant factor exposure is short-HML (short value), at -0.27 loading with t = -4.15. The 2015-2024 period was one of the most extreme growth-over-value runs in history. Our ML model has, empirically, learned to short value stocks. That's a real (and rational) feature-of-the-data finding, but it could have been captured with a much simpler explicit HML-short.
+
+**Decision:** Use this result honestly in the final report. The Sharpe number stays +0.59 as the headline, but the report's evaluation section must include:
+- bootstrap CI [0.13, 1.01],
+- DSR = 0.85 (with a note that it falls below the 0.95 threshold),
+- FF3/FF5 alpha not significant,
+- HML factor loading and its interpretation.
+
+**Reasoning:** Methodologically careful financial-ML work routinely reports these adjustments alongside raw Sharpe. Hiding them would weaken the report's credibility -- and they are themselves the most interesting empirical finding, in the GKX (2020) tradition that "tree models can find known factors empirically even when given no explicit factor labels." This is more honest and more defensible than overclaiming.
+
+**Revisit if:** value reverses materially (then re-run the FF regression on the new sample -- if alpha jumps, the previous result was sample-period-specific), or Layer 3 sector-neutral construction (Bowen) substantially reshapes the factor exposures (then re-run the entire panel).
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
