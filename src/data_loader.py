@@ -1217,24 +1217,52 @@ def _load_sharadar_sf1_raw(
 
     nasdaqdatalink.ApiConfig.api_key = _nasdaq_api_key()
 
-    query: dict = {
-        "dimension": dimension,
-        "calendardate": {"gte": start},
-        "qopts": {"columns": list(cols)},
-        "paginate": True,
-    }
-    if end:
-        query["calendardate"]["lte"] = end
-    if requested is not None:
-        query["ticker"] = list(requested)
+    def _fetch(ticker_chunk: tuple[str, ...] | None) -> pd.DataFrame:
+        query: dict = {
+            "dimension": dimension,
+            "calendardate": {"gte": start},
+            "qopts": {"columns": list(cols)},
+            "paginate": True,
+        }
+        if end:
+            query["calendardate"]["lte"] = end
+        if ticker_chunk is not None:
+            query["ticker"] = list(ticker_chunk)
+        return nasdaqdatalink.get_table("SHARADAR/SF1", **query)
 
-    n_desc = f"{len(requested)} tickers" if requested else "ALL ~16k tickers (slow)"
-    print(
-        f"[load_fundamentals] fetching SHARADAR/SF1 ({dimension}): {n_desc}, "
-        f"calendardate {start} -> {end or 'latest'}..."
-    )
-    fresh = nasdaqdatalink.get_table("SHARADAR/SF1", **query)
-    print(f"[load_fundamentals] received {len(fresh):,} rows")
+    if requested is None:
+        # Full universe: a single paginated pull (no ticker filter).
+        print(
+            f"[load_fundamentals] fetching SHARADAR/SF1 ({dimension}): "
+            f"ALL ~16k tickers (slow), calendardate {start} -> {end or 'latest'}..."
+        )
+        fresh = _fetch(None)
+    else:
+        # Chunk the ticker filter: a ~900-ticker comma-joined `ticker=` value
+        # blows past the API's URL-length limit. 100/chunk keeps each request
+        # small (mirrors the yfinance loader's chunking).
+        CHUNK = 100
+        n_chunks = (len(requested) + CHUNK - 1) // CHUNK
+        print(
+            f"[load_fundamentals] fetching SHARADAR/SF1 ({dimension}): "
+            f"{len(requested)} tickers in {n_chunks} chunk(s), "
+            f"calendardate {start} -> {end or 'latest'}..."
+        )
+        parts: list[pd.DataFrame] = []
+        for i in range(n_chunks):
+            chunk = requested[i * CHUNK : (i + 1) * CHUNK]
+            part = _fetch(chunk)
+            if n_chunks > 1:
+                print(
+                    f"[load_fundamentals]   chunk {i + 1}/{n_chunks}: "
+                    f"{len(chunk)} tickers -> {len(part):,} rows"
+                )
+            parts.append(part)
+        fresh = (
+            pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+        )
+
+    print(f"[load_fundamentals] received {len(fresh):,} rows total")
 
     # Grow the per-dimension union cache. A full-universe pull is authoritative
     # on its own, so it replaces the cache rather than merging with stale subsets.
