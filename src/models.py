@@ -273,6 +273,15 @@ class NNModel:
         import torch
         from sklearn.preprocessing import StandardScaler
 
+        # Single-threaded torch in this fit. Two reasons:
+        # (a) the dataset is small (~50k rows) so threading does not help;
+        # (b) running NNModel.fit ~120 times in a walk-forward loop with
+        #     multi-threaded torch deadlocks on this macOS/conda setup
+        #     after roughly 100 iterations (observed 2026-05-22). Pinning
+        #     to one thread eliminates the deadlock with no measurable
+        #     wall-clock cost on a panel this size.
+        torch.set_num_threads(1)
+
         X_use = _split_X(X)
         X_filled, medians = _impute_train(X_use)
         self._medians = medians

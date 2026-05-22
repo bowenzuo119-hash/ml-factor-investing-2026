@@ -283,12 +283,10 @@ def idiosyncratic_volatility(
             resid = y_demean - beta * m_demean
             return float(np.std(resid, ddof=1)) if len(resid) > 1 else np.nan
 
-        out[ticker] = (
-            joint.rolling(window, min_periods=window // 2)
-            .apply(lambda _: np.nan, raw=False)  # placeholder triggers index
-        )
-        # Re-do via a fast per-window loop (rolling.apply doesn't support
-        # multi-column custom funcs without engine='cython').
+        # Fast per-window loop. We avoid pandas' rolling.apply because it
+        # does not natively support multi-column custom callables without
+        # the cython engine, and the per-window OLS here is too small for
+        # numba/cython JIT overhead to be worth it.
         vals = np.full(len(joint), np.nan)
         arr_y = joint["y"].to_numpy()
         arr_m = joint["m"].to_numpy()
