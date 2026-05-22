@@ -32,7 +32,7 @@ RESULTS_DIR = (
 )
 PHASE_DIR = (
     Path(__file__).resolve().parents[2] / "results"
-    / "03c_tuned_xgboost_8features"
+    / "08_extended_fundamentals"
 )
 PANEL_FILE = (
     Path(__file__).resolve().parents[2] / "data" / "processed"

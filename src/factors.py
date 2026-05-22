@@ -777,18 +777,20 @@ def load_extended_fundamentals_monthly(
         pd.Timestamp(start) - pd.DateOffset(months=15)
     ).strftime("%Y-%m-%d")
 
-    # Pull both dimensions with the extended cols. force_rebuild=True
-    # ensures the cache gets the new columns -- subsequent calls (from
-    # this helper or `load_value_factors_monthly`) can then read from cache.
+    # Pull both dimensions with the extended cols. We no longer
+    # force_rebuild every call -- once the cache has been populated with
+    # the extended cols (the first call writes them in), subsequent
+    # callers can hit the cache cleanly. To re-pull, set force_rebuild
+    # via env var or upstream call.
     print("[load_extended_fundamentals] pulling ARQ with extended cols...")
     arq = load_fundamentals(
         tickers=tickers_t, start=buffer_start, end=end,
-        dimension="ARQ", cols=EXTENDED_SF1_COLS, force_rebuild=True,
+        dimension="ARQ", cols=EXTENDED_SF1_COLS,
     )
     print("[load_extended_fundamentals] pulling ART with extended cols...")
     art = load_fundamentals(
         tickers=tickers_t, start=buffer_start, end=end,
-        dimension="ART", cols=EXTENDED_SF1_COLS, force_rebuild=True,
+        dimension="ART", cols=EXTENDED_SF1_COLS,
     )
 
     if arq.empty and art.empty:

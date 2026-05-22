@@ -43,17 +43,18 @@ RESULTS_DIR = (
 )
 PHASE_DIR = (
     Path(__file__).resolve().parents[2] / "results"
-    / "03c_tuned_xgboost_8features"
+    / "08_extended_fundamentals"
 )
 
 TEST_START = pd.Timestamp("2019-01-01")
 TEST_END = pd.Timestamp("2024-12-31")
 LONG_OOS_START = pd.Timestamp("2015-01-01")  # full walk-forward range
 
-# We tried roughly 5 distinct model/feature configurations along the way:
+# We tried 6 distinct model/feature configurations along the way:
 # Phase 1 (5 feat raw), Phase 1.5 (7 feat raw), Phase 2 (7 feat sr),
-# Phase 3b (7 feat tuned), Phase 3c (8 feat tuned). Used for deflation.
-N_TRIALS = 5
+# Phase 3b (7 feat tuned), Phase 3c (8 feat tuned), Phase 8 (13 feat tuned).
+# Used for deflation -- more trials = bigger penalty.
+N_TRIALS = 6
 BLOCK_BOOTSTRAP_BLOCK_SIZE = 6   # 6-month blocks
 BLOCK_BOOTSTRAP_N_ITERS = 10_000
 RANDOM_STATE = 42
@@ -321,6 +322,7 @@ def main() -> int:
         "Phase 2":   +0.432,
         "Phase 3b":  +0.526,
         "Phase 3c":  +0.589,
+        "Phase 8":   +0.663,
     }
     print(f"  Sharpe across {N_TRIALS} trials: "
           f"{list(trial_sharpes.values())}")

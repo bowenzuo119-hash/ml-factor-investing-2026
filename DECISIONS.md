@@ -541,6 +541,62 @@ The longer-OOS window now crosses the conventional 2.0 threshold without needing
 **Revisit if:** the FF5 regression rerun on Phase 8 predictions still shows alpha non-significant (then we know the 5 quality features ALSO load on FF factors and we have not actually escaped the value-tilt explanation), or if NN's surprise jump to Sharpe +0.62 turns out to be a single-window artefact (rerun in the wider 2010-2024 window to verify).
 
 
+## 2026-05-22 — Phase 8 diagnostic re-run: DSR crosses 0.95 on long-OOS
+
+**Context:** With Phase 8 as the new canonical, the diagnostic suite (Phase 4 DM, Phase 5a SHAP, Phase 5b net beta, Phase 6 sector audit, Phase 7 statistical robustness) was re-pointed at `results/08_extended_fundamentals/` and re-run.
+
+**Phase 7 (statistical robustness)** — the headline-relevant numbers:
+
+| Statistic | Phase 3c | Phase 8 | Verdict |
+|---|---|---|---|
+| Bootstrap 5-95% CI (long-OOS) | [+0.13, +1.01] | [+0.36, +1.13] | Tighter, both exclude 0 |
+| P(bootstrap SR ≤ 0) long-OOS | 1.9% | 0.14% | ~13x stronger |
+| Deflated Sharpe (DSR) long-OOS | 0.85 | **0.96** | **Crosses 0.95 threshold ✓** |
+| FF3 alpha long-OOS | +1.91%/yr (t=0.68) | +2.88%/yr (t=1.17) | larger but still ns |
+| FF5 alpha long-OOS | +1.78%/yr (t=0.67) | +2.68%/yr (t=1.14) | larger but still ns |
+| FF5 HML loading (test) | -0.26 (t=-3.4) | -0.29 (t=-3.7) | similar — short value persists |
+| FF5 Mkt-RF (test) | +0.10 (t=2.8) | +0.16 (t=3.3) | more market exposure |
+| FF5 R² (test) | 0.17 | 0.19 | similar factor coverage |
+
+DSR (Bailey-Lopez de Prado deflated Sharpe with N=6 trials now) of 0.96 on the long-OOS window means: probability that the true Sharpe is positive, after adjusting for skewness, kurtosis, and the 6 model variants we tried, is 96%. That clears the conventional 0.95 / 5% significance threshold. The 5-year test-only window stays at DSR = 0.85 (just below).
+
+**Phase 5a SHAP on 13 features** — feature importance ranking (mean |SHAP| share):
+
+| Rank | Feature | Share |
+|---|---|---|
+| 1 | log_mktcap | 36.5% (down from 41.8% on 8-feat) |
+| 2 | ep | 13.2% |
+| 3 | **roa** (new) | **9.0%** |
+| 4 | ivol | 7.0% |
+| 5 | **accruals** (new) | **6.6%** |
+| 6 | mom | 5.3% |
+| 7 | bm | 4.4% |
+| 8 | dvol | 3.9% |
+| 9 | mvol | 3.7% |
+| 10 | **de** (new) | **3.5%** |
+| 11 | **roe** (new) | **2.3%** |
+| 12 | **asset_growth** (new) | **2.3%** |
+| 13 | rev | 2.2% |
+
+New features collectively account for **23.7% of total SHAP magnitude** — they are doing real work. ROA in particular ranked 3rd. The L1-driven feature selection (reg_alpha=0.79) shows up here: weaker features (rev, asset_growth, roe) have smaller per-prediction effect than in the gain-based ranking.
+
+**Phase 5b net beta on Phase 8:** XGBoost portfolio β = +0.093 (t=1.99, p=0.05, R²_market = 3.3%). Roughly doubled from Phase 3c's +0.046. Still small but the lift in Sharpe came partly from higher market exposure. Consistent with FF5's higher Mkt-RF loading of +0.16. The portfolio is still meaningfully closer to market-neutral than the literature's "+0.2 to +0.4" worry, but no longer dismissibly so.
+
+**Phase 6 sector audit:** unchanged — long-leg Herfindahl 0.112 (+34% above equal-sector baseline), same Industrials-long / Financials-short tilts. Layer 3 (Bowen) is still the right fix; switching to 13 features doesn't reduce sector concentration on its own.
+
+**Phase 4 DM test:** Lasso < NN < XGBoost by MSE (Lasso the smallest); XGBoost > NN > Lasso by Sharpe. Same GKX phenomenon as the Phase 3c DM run.
+
+**Decision:** Phase 8 is the official canonical model. All diagnostic scripts default to it. PHASE_B_RESULTS_REPORT.pdf already updated. The honest report-ready framing:
+- Sharpe = +0.66 on 2019-2024, +0.79 on 2015-2024
+- Long-OOS bootstrap 5-95% CI = [+0.36, +1.13], P(SR ≤ 0) = 0.14%
+- Long-OOS deflated Sharpe = 0.96 ⇒ significant after multiple-testing correction
+- FF5 alpha = +2.68%/yr (t=1.14) — improved but still not significant after factor adjustment
+- HML loading -0.29, market loading +0.16 — value-short and modest net-long-market still present
+- Sector concentration (Herfindahl 0.112 vs 0.083 baseline) unchanged; Layer 3 needed to fix
+
+**Revisit if:** Bowen ships Layer 3 (then re-run sector audit and likely all 4 diagnostics — Sharpe could move further once sector tilts are removed), or once the 2003-2025 data extension lands (then Phase 7 bootstrap and DSR on the 12-year window are the new robustness check).
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:

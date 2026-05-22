@@ -48,7 +48,8 @@ TEST_START = pd.Timestamp("2019-01-01")
 TEST_END = pd.Timestamp("2024-12-31")
 
 INCLUDE_FEATURES = ("mom", "rev", "mvol", "ivol", "log_mktcap",
-                    "bm", "ep", "dvol")
+                    "bm", "ep", "dvol",
+                    "roe", "roa", "de", "asset_growth", "accruals")
 
 # Sample size for the SHAP explanation -- 5000 (date, ticker) rows
 # from the test window. Enough for stable distribution plots, fast
@@ -90,11 +91,11 @@ def main() -> int:
     print(f"  train rows: {len(X_train):,}, test rows: {len(X_test):,}")
 
     # 3. Fit canonical tuned XGBoost ----------------------------------
-    print("\n[3/5] Fitting tuned XGBoost on 2005-2018...")
+    print("\n[3/5] Fitting tuned XGBoost (13-feature defaults) on 2005-2018...")
     model = xgb.XGBRegressor(
-        n_estimators=200, max_depth=4, learning_rate=0.0104,
-        subsample=0.701, colsample_bytree=0.711, min_child_weight=14,
-        reg_alpha=0.444, reg_lambda=3.144, tree_method="hist",
+        n_estimators=200, max_depth=3, learning_rate=0.0115,
+        subsample=0.717, colsample_bytree=0.890, min_child_weight=11,
+        reg_alpha=0.794, reg_lambda=2.305, tree_method="hist",
         random_state=RANDOM_STATE, n_jobs=1,
     )
     model.fit(X_train.to_numpy(), y_train.to_numpy())
