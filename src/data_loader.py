@@ -16,6 +16,10 @@ Sources (see DECISIONS.md for the why):
       `load_sp500_membership`.
     * Macro / regime features: FRED via `pandas-datareader`, loaded via
       `load_macro`.
+    * Firm fundamentals (book equity, earnings, market cap): Sharadar Core US
+      Fundamentals (SHARADAR/SF1) via Nasdaq Data Link, loaded via
+      `load_fundamentals`. Point-in-time (ARQ dimension, dated by `datekey`);
+      source for the value factors B/M and E/P. Needs a paid API key in `.env`.
 
 Design principles:
     * Read each raw source at most once; persist a cleaned version to
@@ -28,6 +32,7 @@ Design principles:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from urllib.request import urlretrieve
 
@@ -76,6 +81,35 @@ DEFAULT_MACRO_SERIES: tuple[str, ...] = (
     "DFF",     # Federal Funds effective rate
 )
 MACRO_CACHE = "macro_daily.parquet"
+
+# Sharadar Core US Fundamentals (SHARADAR/SF1) via Nasdaq Data Link. Source for
+# the Fama-French value factors B/M and E/P, which CRSP does not carry (see
+# DECISIONS 2026-05-22). The API key is read from this environment variable,
+# normally via a gitignored .env; the lookup is lazy (see `_nasdaq_api_key`) so
+# the CRSP / yfinance / FRED paths never require a Nasdaq subscription.
+NASDAQ_API_KEY_ENV = "NASDAQ_DATA_LINK_API_KEY"
+
+# One parquet cache per SF1 dimension (ARQ, ART, ...), since they are distinct
+# datasets. Each stores the union of all (ticker, datekey) rows ever fetched for
+# that dimension; see `_load_sharadar_sf1_raw` for the cache hit/miss rules.
+SHARADAR_SF1_CACHE_TMPL = "sharadar_sf1_{dimension}.parquet"
+
+# Minimal SF1 column set for B/M and E/P. Pulling only what we use keeps each
+# response small and well under the API's per-call row cap.
+SHARADAR_SF1_DEFAULT_COLS: tuple[str, ...] = (
+    "ticker",
+    "dimension",
+    "calendardate",   # fiscal period end -- NOT point-in-time, never join on this
+    "datekey",        # date the filing became public -> the point-in-time key
+    "reportperiod",   # fiscal period end as reported
+    "equity",         # common shareholder equity -> B/M numerator
+    "netinc",         # net income (quarterly if ARQ, TTM if ART) -> E/P numerator
+    "eps",            # earnings per share (sanity check)
+    "sharesbas",      # basic shares outstanding (market-cap reconstruction)
+    "marketcap",      # market cap at datekey -> B/M and E/P denominator
+    "pb",             # vendor price-to-book (cross-check vs our B/M)
+    "pe",             # vendor price-to-earnings (cross-check vs our E/P)
+)
 
 
 def download_sp500_universe(*, force: bool = False) -> dict[str, Path]:
@@ -295,8 +329,9 @@ def load_prices(
     * Data ends 2022-12-30. The Project Framework's 2019-2024 test window
       will be served by a future yfinance splice for 2023-2024 (DECISIONS
       2026-05-13 'Yfinance splice for 2023-2024').
-    * Fundamentals (B/M, E/P, D/P) are NOT in this dataset; that's
-      Compustat, not CRSP. See DECISIONS 2026-05-13 'Defer fundamentals'.
+    * Fundamentals (B/M, E/P, D/P) are NOT in this dataset; CRSP is prices
+      only. They come from Sharadar SF1 via :func:`load_fundamentals` (see
+      DECISIONS 2026-05-22 'Fundamentals via Sharadar SF1').
 
     Raises
     ------
@@ -1070,6 +1105,285 @@ def load_sp500_membership(asof: str) -> list[str]:
 
 
 # --------------------------------------------------------------------------
+# Firm fundamentals (Sharadar SF1 via Nasdaq Data Link)
+#
+# Added 2026-05-22 (DECISIONS 2026-05-22). Point-in-time book equity, earnings,
+# and market cap for the Fama-French value factors B/M and E/P. Needs a Nasdaq
+# Data Link API key in NASDAQ_DATA_LINK_API_KEY (.env); the key is read lazily
+# so importing this module never requires it.
+# --------------------------------------------------------------------------
+
+
+def _nasdaq_api_key() -> str:
+    """Return the Nasdaq Data Link API key, loading the repo-root ``.env`` first.
+
+    Looked up lazily (not at import time) so that importing this module -- or
+    using the CRSP / yfinance / FRED loaders, none of which need a key -- never
+    requires a Nasdaq subscription. The key lives in the
+    ``NASDAQ_DATA_LINK_API_KEY`` environment variable, normally populated from a
+    gitignored ``.env``.
+
+    Raises
+    ------
+    RuntimeError
+        If the variable is unset after loading ``.env``.
+    """
+    from dotenv import load_dotenv  # deferred: only fundamentals need it
+
+    # Point at the repo-root .env explicitly so the lookup works regardless of
+    # the caller's CWD. override=False (the default) means a real environment
+    # variable always wins over the file.
+    load_dotenv(DATA_DIR.parent / ".env")
+    key = os.getenv(NASDAQ_API_KEY_ENV)
+    if not key:
+        raise RuntimeError(
+            f"{NASDAQ_API_KEY_ENV} is not set. Add it to a .env file in the repo "
+            f"root (copy .env.example) or export it in your shell. Get a key at "
+            f"https://data.nasdaq.com/account/profile -- the Sharadar SF1 table "
+            f"requires a paid subscription."
+        )
+    return key
+
+
+def _load_sharadar_sf1_raw(
+    tickers: tuple[str, ...] | None,
+    *,
+    start: str,
+    end: str | None,
+    dimension: str,
+    cols: tuple[str, ...],
+    force_rebuild: bool = False,
+) -> pd.DataFrame:
+    """Fetch SHARADAR/SF1 rows from Nasdaq Data Link; cache the per-dimension union.
+
+    SF1 ``dimension`` values (ARQ, ART, MRY, ...) are distinct datasets, so each
+    gets its own cache file (``sharadar_sf1_ARQ.parquet`` etc.). The cache holds
+    the union of all rows ever fetched for that dimension, de-duplicated on
+    ``(ticker, datekey)``. A cache HIT requires (a) an explicit ``tickers`` list
+    fully contained in the cache and (b) the cached ``calendardate`` span
+    covering ``[start, end]``; otherwise the request is fetched and merged in.
+
+    ``tickers=None`` means the whole SF1 universe (~16k names, slow). It never
+    serves from a partial cache -- we cannot prove a ticker-subset cache is the
+    full universe -- and always re-downloads, overwriting the cache with the
+    (superset) result.
+
+    The API key is read only on the fetch path, so a cache hit needs neither a
+    key nor the network.
+
+    Returns
+    -------
+    pd.DataFrame
+        Flat frame (RangeIndex) with the requested ``cols``, restricted to
+        ``calendardate`` in ``[start, end]``. The public
+        :func:`load_fundamentals` types the date columns and sets the
+        ``(datekey, ticker)`` index.
+    """
+    cache_path = PROCESSED_DIR / SHARADAR_SF1_CACHE_TMPL.format(dimension=dimension)
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end) if end else None
+    requested = (
+        tuple(sorted({str(t).strip().upper() for t in tickers})) if tickers else None
+    )
+
+    def _slice(frame: pd.DataFrame) -> pd.DataFrame:
+        cal = pd.to_datetime(frame["calendardate"])
+        mask = cal >= start_ts
+        if end_ts is not None:
+            mask &= cal <= end_ts
+        if requested is not None:
+            mask &= frame["ticker"].isin(requested)
+        return frame.loc[mask].copy()
+
+    # --- Cache hit path (explicit ticker list only) --------------------
+    if not force_rebuild and requested is not None and cache_path.exists():
+        cached = pd.read_parquet(cache_path)
+        cal = pd.to_datetime(cached["calendardate"])
+        covers_start = cal.min() <= start_ts
+        covers_end = (end_ts is None) or (cal.max() >= end_ts)
+        if (
+            set(requested).issubset(set(cached["ticker"]))
+            and covers_start
+            and covers_end
+        ):
+            print(
+                f"[load_fundamentals] cache hit ({dimension}): "
+                f"{len(requested)} tickers, {start} -> {end or 'latest'}"
+            )
+            return _slice(cached)
+
+    # --- Cache miss: fetch from Nasdaq Data Link -----------------------
+    import nasdaqdatalink  # deferred: only fundamentals pull in this dependency
+
+    nasdaqdatalink.ApiConfig.api_key = _nasdaq_api_key()
+
+    query: dict = {
+        "dimension": dimension,
+        "calendardate": {"gte": start},
+        "qopts": {"columns": list(cols)},
+        "paginate": True,
+    }
+    if end:
+        query["calendardate"]["lte"] = end
+    if requested is not None:
+        query["ticker"] = list(requested)
+
+    n_desc = f"{len(requested)} tickers" if requested else "ALL ~16k tickers (slow)"
+    print(
+        f"[load_fundamentals] fetching SHARADAR/SF1 ({dimension}): {n_desc}, "
+        f"calendardate {start} -> {end or 'latest'}..."
+    )
+    fresh = nasdaqdatalink.get_table("SHARADAR/SF1", **query)
+    print(f"[load_fundamentals] received {len(fresh):,} rows")
+
+    # Grow the per-dimension union cache. A full-universe pull is authoritative
+    # on its own, so it replaces the cache rather than merging with stale subsets.
+    if not force_rebuild and requested is not None and cache_path.exists():
+        cached = pd.read_parquet(cache_path)
+        merged = pd.concat([cached, fresh], ignore_index=True)
+        dedup = [c for c in ("ticker", "datekey") if c in merged.columns]
+        if dedup:
+            merged = merged.drop_duplicates(subset=dedup, keep="last")
+    else:
+        merged = fresh
+
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    merged.to_parquet(cache_path, index=False)
+    size_kb = cache_path.stat().st_size / 1024
+    print(
+        f"[load_fundamentals] cached {len(merged):,} rows ({size_kb:.1f} KB) "
+        f"-> {cache_path.name}"
+    )
+    return _slice(fresh)
+
+
+def load_fundamentals(
+    *,
+    tickers: tuple[str, ...] | list[str] | None = None,
+    start: str = "2000-01-01",
+    end: str | None = None,
+    dimension: str = "ARQ",
+    cols: tuple[str, ...] | list[str] | None = None,
+    force_rebuild: bool = False,
+) -> pd.DataFrame:
+    """Load point-in-time firm fundamentals from Sharadar SF1 (Nasdaq Data Link).
+
+    Source for the Fama-French value factors (B/M, E/P), which CRSP does not
+    carry. See DECISIONS 2026-05-22 'Fundamentals via Sharadar SF1'. The first
+    call for a given ``dimension`` downloads and caches to
+    ``data/processed/sharadar_sf1_<dimension>.parquet``; later calls covered by
+    the cache read from disk (no key, no network).
+
+    Parameters
+    ----------
+    tickers : sequence of str, optional
+        Universe to pull. ``None`` (default) means the entire SF1 universe
+        (~16k tickers, slow and never cached) -- pass the S&P 500 union from
+        :func:`load_sp500_membership` instead.
+    start : str, default "2000-01-01"
+        Inclusive lower bound on ``calendardate`` (fiscal period end, ISO).
+    end : str, optional
+        Inclusive upper bound on ``calendardate``. ``None`` means latest
+        available. (With ``end=None`` a cache hit serves whatever the cache
+        already holds; pass ``force_rebuild=True`` to pull newer filings.)
+    dimension : str, default "ARQ"
+        SF1 dimension. Use **'ARQ'** (As-Reported Quarterly) for backtests: it
+        is point-in-time with no restatements. Others: 'ART'/'MRT' (trailing
+        twelve months -- use 'ART' for a stable annual E/P numerator),
+        'ARY'/'MRY' (annual), 'MRQ' (most-recent quarterly, post-restatement --
+        has look-ahead, avoid for backtests).
+    cols : sequence of str, optional
+        SF1 columns to keep. Defaults to :data:`SHARADAR_SF1_DEFAULT_COLS` (the
+        minimum for B/M and E/P). Must include ``ticker``, ``datekey`` and
+        ``calendardate`` for the index and cache to work.
+    force_rebuild : bool, keyword-only, default False
+        Bypass the cache and re-download.
+
+    Returns
+    -------
+    pd.DataFrame
+        Long-format frame indexed by a ``(datekey, ticker)`` MultiIndex --
+        ``datekey`` is the date the filing became public, the only safe key for
+        point-in-time joins with prices. ``calendardate`` (fiscal period end) is
+        kept as a column but **must not** be the join key: filings post 30-90
+        days after period end, so joining on ``calendardate`` leaks the future.
+        Numeric columns are whatever ``cols`` requested.
+
+    Examples
+    --------
+    >>> fund = load_fundamentals(tickers=["AAPL", "MSFT"], start="2015-01-01")
+    >>> bm_ep = compute_value_factors(fund)
+    """
+    valid_dims = {"ARQ", "ARY", "ART", "MRQ", "MRY", "MRT"}
+    if dimension not in valid_dims:
+        raise ValueError(
+            f"dimension must be one of {sorted(valid_dims)}, got {dimension!r}. "
+            f"Use 'ARQ' for point-in-time backtests."
+        )
+    cols = tuple(cols) if cols else SHARADAR_SF1_DEFAULT_COLS
+    tickers_t = tuple(tickers) if tickers else None
+
+    df = _load_sharadar_sf1_raw(
+        tickers_t,
+        start=start,
+        end=end,
+        dimension=dimension,
+        cols=cols,
+        force_rebuild=force_rebuild,
+    )
+
+    for c in ("calendardate", "datekey", "reportperiod"):
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c])
+    # Date-first (datekey, ticker) index to match the module's (date, identifier)
+    # layout; datekey is the point-in-time analogue of the price panels' `date`.
+    return df.sort_values(["datekey", "ticker"]).set_index(["datekey", "ticker"])
+
+
+def compute_value_factors(fundamentals: pd.DataFrame) -> pd.DataFrame:
+    """Derive book-to-market (B/M) and earnings-to-price (E/P) from an SF1 frame.
+
+    Thin convenience over :func:`load_fundamentals` so the data side can be
+    smoke-tested. Factor *construction* proper belongs in ``factors.py``
+    (Person B) -- this is just the two canonical Fama-French value ratios.
+
+    Both ratios use ``marketcap`` measured at ``datekey`` (the point-in-time
+    publication date), so the result inherits the input's PIT safety and can be
+    merged with prices without look-ahead.
+
+    Caveat on E/P: ``netinc`` is single-quarter under ``dimension='ARQ'`` and
+    trailing-twelve-months under ``'ART'``. For a stable, Fama-French-comparable
+    annual E/P, feed an ``ART`` frame (or sum four ARQ quarters in factors.py);
+    a single-quarter E/P is ~4x noisier.
+
+    Parameters
+    ----------
+    fundamentals : pd.DataFrame
+        Output of :func:`load_fundamentals`; needs columns ``equity``,
+        ``netinc``, ``marketcap`` (and keeps ``calendardate`` if present).
+
+    Returns
+    -------
+    pd.DataFrame
+        Same ``(datekey, ticker)`` index, columns ``calendardate`` (if present),
+        ``bm``, ``ep``. Non-positive market cap yields NaN ratios (guarded).
+    """
+    missing = {"equity", "netinc", "marketcap"} - set(fundamentals.columns)
+    if missing:
+        raise KeyError(
+            f"fundamentals is missing columns {sorted(missing)} needed for B/M "
+            f"and E/P. Load with the default cols, or include them in `cols=`."
+        )
+    mcap = fundamentals["marketcap"].where(fundamentals["marketcap"] > 0)
+    out = pd.DataFrame(index=fundamentals.index)
+    if "calendardate" in fundamentals.columns:
+        out["calendardate"] = fundamentals["calendardate"]
+    out["bm"] = fundamentals["equity"] / mcap
+    out["ep"] = fundamentals["netinc"] / mcap
+    return out
+
+
+# --------------------------------------------------------------------------
 # Script entry point - run the data pipeline end-to-end.
 # --------------------------------------------------------------------------
 
@@ -1245,3 +1559,36 @@ if __name__ == "__main__":
     print(f"  VIX:                       {macro.loc['2008-09-15', 'VIXCLS']:.2f}  (spiked from ~25 to 30+)")
     print(f"  Term spread (DGS10-DGS2):  {spread.loc['2008-09-15']:.2f}  (recession-watch indicator)")
     print(f"  Credit spread (DBAA-DAAA): {credit.loc['2008-09-15']:.2f}  (default-risk gauge)")
+
+    # ---- Sharadar SF1 fundamentals (optional: needs an API key) ----
+    print()
+    print("=" * 70)
+    print("Sharadar SF1 fundamentals smoke test (skipped without a key)")
+    print("=" * 70)
+    if os.getenv(NASDAQ_API_KEY_ENV) or (DATA_DIR.parent / ".env").exists():
+        try:
+            fund = load_fundamentals(
+                tickers=("AAPL", "MSFT", "JPM"),
+                start="2015-01-01", end="2016-12-31", dimension="ARQ",
+            )
+            print()
+            print(f"Shape: {fund.shape[0]:,} rows x {fund.shape[1]} cols")
+            print(f"Index names: {fund.index.names}")
+            print(
+                f"Tickers: "
+                f"{sorted(fund.index.get_level_values('ticker').unique())}"
+            )
+            print()
+            print("Most recent filing per ticker (datekey is point-in-time):")
+            latest = fund.groupby(level="ticker").tail(1)
+            print(
+                latest[["calendardate", "equity", "netinc", "marketcap"]].to_string()
+            )
+            print()
+            vf = compute_value_factors(fund)
+            print("Derived B/M and E/P (last row per ticker):")
+            print(vf.groupby(level="ticker").tail(1).to_string())
+        except Exception as exc:  # noqa: BLE001 - smoke test: report and move on
+            print(f"  skipped/failed: {type(exc).__name__}: {exc}")
+    else:
+        print("  NASDAQ_DATA_LINK_API_KEY not set and no .env found -- skipping.")

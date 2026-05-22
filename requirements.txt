@@ -7,6 +7,8 @@ torch
 hmmlearn
 yfinance
 pandas-datareader
+nasdaq-data-link  # Sharadar SF1 fundamentals (import name: nasdaqdatalink)
+python-dotenv     # load NASDAQ_DATA_LINK_API_KEY from a local .env file
 matplotlib
 seaborn
 shap
