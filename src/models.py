@@ -117,7 +117,22 @@ def _demean_y_by_sector_date(y: pd.Series, X: pd.DataFrame) -> pd.Series:
     date = X.index.get_level_values(0)
     sector = X["sector"].to_numpy()
     sector_date_mean = y.groupby([date, sector]).transform("mean")
-    return y - sector_date_mean
+    demeaned = y - sector_date_mean
+    # Fix 4 (audit 2026-05-23): verify the demean leaves zero residual within
+    # every (date, sector) group. Should always pass; defensive against a
+    # future regression (pandas groupby ordering quirk, accidental index
+    # misalignment, etc.) that would silently kill Layer-2's sector-neutral
+    # learning objective.
+    residual_max = (
+        demeaned.groupby([date, sector]).transform("mean").abs().max()
+    )
+    if residual_max > 1e-9:
+        raise AssertionError(
+            f"Layer-2 sector-demean residual = {residual_max:.2e} exceeds "
+            f"1e-9 tolerance. The (date, sector) group means of the "
+            f"demeaned target are not zero; demean is broken."
+        )
+    return demeaned
 
 
 # --------------------------------------------------------------------------
