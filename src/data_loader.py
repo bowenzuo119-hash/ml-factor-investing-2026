@@ -1906,6 +1906,152 @@ def bulk_download_all_sharadar(
 
 
 # --------------------------------------------------------------------------
+# Survivorship-free broad universe + Sharadar-derived monthly returns.
+# Built on the bulk archive above (TICKERS + DAILY for the universe, SEP
+# closeadj for returns). Because TICKERS keys aliveness by first/lastpricedate
+# and DAILY/SEP carry delisted names, the universe and panel are point-in-time
+# clean -- no survivorship leak from trading names that only later existed.
+# --------------------------------------------------------------------------
+
+# Sharadar `category` values that are US domestic common stock (excludes ADRs,
+# preferred, ETFs, CEFs, institutional). startswith catches the primary and
+# the dual-class ("... Primary/Secondary Class") variants.
+DOMESTIC_COMMON_PREFIX = "Domestic Common Stock"
+# Major US exchanges (Sharadar spellings; NYSEARCA == "ARCA", NYSEMKT == AMEX).
+DEFAULT_US_EXCHANGES = ("NYSE", "NASDAQ", "NYSEARCA", "BATS", "NYSEMKT")
+
+_UNIVERSE_META_CACHE: pd.DataFrame | None = None
+_DAILY_MCAP_MONTHLY_CACHE: pd.DataFrame | None = None
+
+
+def _load_universe_meta(force: bool = False) -> pd.DataFrame:
+    """Cached TICKERS metadata for the SEP (price) universe, dates parsed."""
+    global _UNIVERSE_META_CACHE
+    if _UNIVERSE_META_CACHE is not None and not force:
+        return _UNIVERSE_META_CACHE
+    cols = [
+        "table", "permaticker", "ticker", "exchange", "isdelisted",
+        "category", "sector", "firstpricedate", "lastpricedate",
+    ]
+    df = pd.read_parquet(RAW_DIR / "tickers.parquet", columns=cols)
+    df = df[df["table"] == "SEP"].copy()  # one row per ticker, price coverage
+    for c in ("firstpricedate", "lastpricedate"):
+        df[c] = pd.to_datetime(df[c], errors="coerce")
+    _UNIVERSE_META_CACHE = df.reset_index(drop=True)
+    return _UNIVERSE_META_CACHE
+
+
+def _load_daily_marketcap_monthly(
+    start: str = "2001-12-01", force: bool = False
+) -> pd.DataFrame:
+    """Cached month-end marketcap per ticker from DAILY.
+
+    Long frame ``[period, ticker, marketcap]`` where ``marketcap`` is the last
+    positive DAILY marketcap in that calendar month. One-time ~40M-row pass,
+    memoised so per-rebalance universe lookups are cheap.
+    """
+    global _DAILY_MCAP_MONTHLY_CACHE
+    if _DAILY_MCAP_MONTHLY_CACHE is not None and not force:
+        return _DAILY_MCAP_MONTHLY_CACHE
+    df = pd.read_parquet(RAW_DIR / "daily.parquet", columns=["ticker", "date", "marketcap"])
+    df["date"] = pd.to_datetime(df["date"])
+    df = df[(df["date"] >= pd.Timestamp(start)) & (df["marketcap"] > 0)]
+    df["period"] = df["date"].dt.to_period("M")
+    df = df.sort_values("date")
+    monthly = df.groupby(["period", "ticker"], as_index=False)["marketcap"].last()
+    _DAILY_MCAP_MONTHLY_CACHE = monthly
+    return monthly
+
+
+def load_universe_at(
+    asof,
+    top_n_by_marketcap: int = 2000,
+    *,
+    require_common_stock: bool = True,
+    exchanges: tuple[str, ...] = DEFAULT_US_EXCHANGES,
+) -> pd.DataFrame:
+    """Survivorship-free top-N-by-marketcap universe eligible at ``asof``.
+
+    A name is eligible if (a) it is US domestic common stock on a major
+    exchange, (b) it was trading at ``asof`` (``firstpricedate <= asof <=
+    lastpricedate`` -- delisted names drop out after their last price, never
+    before), and (c) it has a positive DAILY marketcap that month. The top
+    ``top_n_by_marketcap`` by marketcap are returned. Rolling top-N (vs a fixed
+    dollar threshold) avoids inflation drift in the cutoff.
+
+    Returns ``DataFrame[ticker, permaticker, sector, marketcap]``.
+    """
+    asof = pd.Timestamp(asof)
+    m = _load_universe_meta()
+    if require_common_stock:
+        m = m[m["category"].str.startswith(DOMESTIC_COMMON_PREFIX, na=False)]
+    if exchanges:
+        m = m[m["exchange"].isin(exchanges)]
+    m = m[(m["firstpricedate"] <= asof) & (m["lastpricedate"] >= asof)]
+
+    monthly = _load_daily_marketcap_monthly()
+    mc = monthly[monthly["period"] == asof.to_period("M")][["ticker", "marketcap"]]
+
+    out = m.merge(mc, on="ticker", how="inner")
+    out = (
+        out[out["marketcap"] > 0]
+        .sort_values("marketcap", ascending=False)
+        .head(int(top_n_by_marketcap))
+    )
+    return out[["ticker", "permaticker", "sector", "marketcap"]].reset_index(drop=True)
+
+
+def _read_sep(tickers, start, end, value_col: str = "closeadj") -> pd.DataFrame:
+    """Read [ticker, date, value_col] from SEP, date- (and optionally ticker-)
+    filtered via parquet predicate pushdown so we don't pull all ~46M rows."""
+    import pyarrow.parquet as pq
+
+    start_d = pd.Timestamp(start).date()
+    end_d = pd.Timestamp(end).date()
+    filt = [("date", ">=", start_d), ("date", "<=", end_d)]
+    if tickers is not None:
+        filt.append(("ticker", "in", list({str(t) for t in tickers})))
+    tbl = pq.read_table(
+        RAW_DIR / "sep.parquet", columns=["ticker", "date", value_col], filters=filt
+    )
+    df = tbl.to_pandas()
+    df["date"] = pd.to_datetime(df["date"])
+    return df
+
+
+def compute_monthly_returns_sharadar(
+    start: str,
+    end: str,
+    tickers=None,
+    value_col: str = "closeadj",
+) -> pd.DataFrame:
+    """Wide monthly total returns from SEP ``closeadj`` (split+dividend adjusted).
+
+    For each ticker, takes the last ``closeadj`` of each calendar month and
+    `pct_change`s it. The index is the **trading-day month-end** (the market's
+    last trading date that month, e.g. 2015-01-30), matching the convention of
+    the existing CRSP/yfinance panels so the feature builder and engine align.
+
+    Reads one buffer month before ``start`` so the first reported return is the
+    return *into* ``start``. ``tickers=None`` uses the whole SEP universe.
+    """
+    start_ts, end_ts = pd.Timestamp(start), pd.Timestamp(end)
+    buf_start = start_ts - pd.Timedelta(days=45)  # one extra month for pct_change
+    df = _read_sep(tickers, buf_start, end_ts, value_col)
+    df["period"] = df["date"].dt.to_period("M")
+    df = df.sort_values("date")
+
+    last_val = df.groupby(["period", "ticker"], as_index=False)[value_col].last()
+    me_date = df.groupby("period")["date"].max()  # market-wide last trading day
+    wide = last_val.pivot(index="period", columns="ticker", values=value_col)
+    wide.index = wide.index.map(me_date)
+    wide = wide.sort_index()
+
+    returns = wide.pct_change().iloc[1:]
+    return returns[(returns.index >= start_ts) & (returns.index <= end_ts)]
+
+
+# --------------------------------------------------------------------------
 # Script entry point - run the data pipeline end-to-end.
 # --------------------------------------------------------------------------
 
