@@ -40,7 +40,7 @@ RESULTS_DIR = (
 )
 PHASE_DIR = (
     Path(__file__).resolve().parents[2] / "results"
-    / "14_official_canonical_k5"
+    / "15_canonical_2002"
 )
 
 TEST_START = pd.Timestamp("2019-01-01")

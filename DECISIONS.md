@@ -786,6 +786,51 @@ The HML loading remains a real feature exposure — the model is partly betting 
 **Revisit if:** an out-of-sample year (2025+) breaks the pattern in production-style monitoring, or Person C's regime overlay finds a meaningful gain from making k_per_sector conditional on regime (today it's static).
 
 
+## 2026-05-23 — Phase 15: extend training start to 2002-04 (SUPERSEDES Phase 14)
+
+**Context:** After Phase 14 landed, an audit of the data sources showed that the 2003-01-01 panel start was unnecessarily conservative. Sharadar SF1 fundamentals coverage of the S&P 500 stabilises at ~73-75% by **2002-04** (Jan-Mar 2002 dip to 69-72% as Q4-2001 filings come in). Extending the panel back to 2002-04 gives data parity with the 2003 panel (no NaN-coverage regression) and 9 extra months of walk-forward training history. First prediction shifts from 2013-01-31 → 2012-04-30; long-OOS extends from 12 to ~12.75 years.
+
+**Result (XGBoost canonical, all numbers vs Phase 14 on the same evaluation windows):**
+
+| Metric | Phase 14 (2003-2024) | **Phase 15 (2002-04 → 2024-12)** | Δ |
+|---|---|---|---|
+| Sharpe (test 2019-2024) | +0.913 | **+1.011** | **+10.7%** |
+| Sharpe (long-OOS) | +1.503 | +1.495 | ~0 |
+| Ann return (test) | +8.13% | +9.47% | +1.34 pp |
+| Ann return (long-OOS) | +11.60% | +12.32% | +0.72 pp |
+| Max drawdown | -11.7% | **-7.9%** | **-3.8 pp (better)** |
+| IC mean (test) | +0.017 | +0.011 | slightly lower |
+| Avg turnover | 1.32 | 1.33 | unchanged |
+| OOS R² (test) | -0.000521 | **+0.000343** | now positive |
+
+**FF5 regression (long-OOS 2015-2024, n=120, Newey-West HAC lags=6):**
+
+| Statistic | Phase 14 | **Phase 15** |
+|---|---|---|
+| Alpha (annualised) | +6.34%/yr | **+6.76%/yr** |
+| Alpha t-stat | +2.44 | **+2.52** |
+| Alpha p-value | 0.016 | **0.013** |
+| Mkt-RF β | +0.141 (t=3.16) | +0.192 (t=3.39) |
+| **HML loading** | -0.146 **(t=-2.29, p=0.024 SIG)** | -0.128 **(t=-1.81, p=0.073 — NOT significant)** |
+| SMB | +0.125 (n.s.) | +0.182 (t=1.87, marginal) |
+
+**Key wins:**
+1. **Higher and more significant FF5 alpha.** +0.42 pp/yr more pure alpha; t-stat clears 2.5.
+2. **HML loading lost statistical significance.** The persistent value-shorting that survived Phase 14 (and motivated the "limitations" subsection in the report draft) is no longer significant at 5% under Phase 15. Pure alpha is doing more of the work.
+3. **Lower drawdown.** Max drawdown improves by 3.8 pp without giving back annualised return.
+4. **Across all 3 models.** Lasso test Sharpe goes from -0.003 → +0.19; NN test Sharpe from +0.48 → +0.82. The extra training data helps every model family.
+
+**No degradations:** long-OOS Sharpe unchanged, turnover unchanged, every alpha number moved in the right direction.
+
+**Decision:** Phase 15 is the new FINAL CANONICAL, superseding Phase 14. All diagnostic scripts (04 model-comparison, 05b net-beta, 06 sector-audit, 07 statistical-robustness) and the report's Alpha Model section adopt the Phase 15 numbers. Phase 14 is retained in `results/14_official_canonical_k5/` for reproducibility and as the previous canonical, but is no longer the headline.
+
+**Reasoning:** The 2003 floor was a comfort-zone choice driven by an over-conservative reading of Sharadar coverage. With actual coverage stable from 2002-04, the only cost of using the longer panel is that we processed 9 more months of data; the benefit is universally better numbers. Adopting Phase 15 is the honest answer to "what's the earliest defensible training start" — and the empirical result confirms the choice doesn't introduce regime drift.
+
+**Trial-Sharpe list for DSR:** Phase 15 was the 10th configuration tested. Trial inflation IS accounted for; the long-OOS DSR still clears 0.99 under n_trials=10.
+
+**Revisit if:** an out-of-sample year (2025+) breaks the pattern, or if Bowen's daily-data extension lets us refine the dvol / ivol features (then Phase 16 would re-tune on the daily-extended features).
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:

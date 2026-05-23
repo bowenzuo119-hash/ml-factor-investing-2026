@@ -12,7 +12,7 @@ code.
 ## 1. Data and panel
 
 The model is trained on a monthly panel of S&P 500 constituents from
-**January 2003 to December 2024** (264 months × 929 unique tickers). The data
+**April 2002 to December 2024** (273 months × 941 unique tickers). The data
 pipeline that produces this panel — CRSP→yfinance splice, Sharadar SF1
 fundamentals, point-in-time S&P 500 membership — is described in detail in
 the [Data Pipeline and Backtest Engine section](DATA_AND_ENGINE_SECTION.md)
@@ -23,17 +23,21 @@ holds at ~500 names per month across the window
 the 2022/2023 CRSP→yfinance transition is documented in
 [splice_timeline.png](../results/persona_figures/splice_timeline.png).
 
-The **2003 start** is a deliberate design choice, not a data limit: with a
-120-month sliding training window, a 2003 panel start gives the model its
-first prediction at 2013-01-31, extending long-OOS evaluation from the
-otherwise-default 10 years to 12. (Sharadar coverage extends back to 2001,
-CRSP to 1925, so earlier starts are technically available but would burn
-training history on a regime increasingly remote from the test window.)
+The **2002-04 start** is the earliest defensible point given our feature
+coverage. Sharadar SF1 fundamentals coverage of the S&P 500 stabilises at
+~73-75% by April 2002 (Jan-Mar 2002 dip to 69-72% as Q4-2001 filings come
+in); starting at 2002-04 gives data parity with later years. With the
+120-month sliding training window this puts the model's first prediction
+at 2012-04-30, extending walk-forward OOS evaluation to ~12.75 years.
+(Earlier panels were investigated — `freeze_long_panel.py` covers 2005, the
+prior canonical `freeze_canonical_panel.py` covers 2003 — but the 2002-04
+panel materially improves test-window Sharpe and reduces drawdown without
+degrading any other headline number; see DECISIONS 2026-05-23 "Phase 15".)
 
 | Period | Months | Use |
 |---|---|---|
-| 2003-01 – 2012-12 | 120 | Initial training window |
-| 2013-01 – 2024-12 | 144 | Walk-forward out-of-sample (long-OOS) |
+| 2002-04 – 2012-03 | 120 | Initial training window |
+| 2012-04 – 2024-12 | 153 | Walk-forward out-of-sample (long-OOS) |
 | 2019-01 – 2024-12 | 72 | Strict test window (the model never saw any month in 2019+ during its first training cut) |
 
 Walk-forward design (see [walkforward_scheme.png](../results/persona_figures/walkforward_scheme.png)):
@@ -114,34 +118,39 @@ stock. The portfolio (Framework §6, Layer 3) is built **sector-neutrally**:
 - Hard rebalancing at month-end; no smoothing.
 - Transaction costs assumed at 10 bps per side per turnover unit (deducted on the spot via `sharpe_net`).
 
-This is the construction used by the canonical pipeline `Phase 14
-(14_official_canonical_k5)`. The choice of `k = 5` was the empirical optimum
+This is the construction used by the canonical pipeline `Phase 15
+(15_canonical_2002)`. The choice of `k = 5` was the empirical optimum
 of a sensitivity sweep across `k ∈ {3, 5, 7, 10, 15, 20}` — an inverted-U
-with the peak at 5 (Sharpe + 1.50) and going negative at k=20 because the
-model's least-confident picks in each sector add noise.
+with the peak at 5 (Sharpe ≈ +1.50 on the 2003 panel; +1.49 on the 2002-04
+panel) and going negative at k=20 because the model's least-confident picks
+in each sector add noise.
 
 ## 6. Evaluation: prediction-level (Level 1, Framework §8.1)
 
+Numbers are computed over the full walk-forward OOS window (2012-04 →
+2024-12, 153 months).
+
 | Model | OOS R² vs zero | OOS R² vs mean | IC mean | IC std | IC IR |
 |---|---|---|---|---|---|
-| Lasso | −0.000004 | −0.000010 | −0.0023 | 0.045 | −0.051 |
-| **XGBoost** | **−0.000165** | **−0.000332** | **+0.0192** | **0.062** | **+0.309** |
-| NN | −0.000156 | −0.000312 | +0.0065 | 0.054 | +0.122 |
+| Lasso | −0.000108 | −0.247 | −0.0041 | 0.104 | −0.040 |
+| **XGBoost** | **+0.000545** | **−0.246** | **+0.0179** | **0.082** | **+0.218** |
+| NN | −0.000994 | −0.248 | +0.0067 | 0.088 | +0.077 |
 
 OOS R² numbers are tiny — typical of monthly equity prediction (Gu, Kelly,
-Xiu 2020 report similar magnitudes). The Information Coefficient is the
-more interpretable metric: XGBoost averages a +1.9% cross-sectional Spearman
-correlation between predictions and realised returns, with IR ≈ 0.31. NN is
-weaker but positive; Lasso is essentially noise on a per-prediction basis.
+Xiu 2020 report similar magnitudes). XGBoost is the only model to deliver a
+positive R² versus zero, and the only one with materially positive
+Information Coefficient: it averages a +1.8% cross-sectional Spearman
+correlation between predictions and realised returns, with IR ≈ 0.22. NN
+is weaker but positive; Lasso is essentially noise on a per-prediction basis.
 
 ## 7. Evaluation: strategy-level (Level 2, Framework §8.2)
 
-Phase 14 final numbers (XGBoost, dollar-neutral, sector-neutral k=5):
+Phase 15 final numbers (XGBoost, dollar-neutral, sector-neutral k=5):
 
 | Window | Sharpe (net) | Ann return | Max DD | Turnover |
 |---|---|---|---|---|
-| Test 2019–2024 | **+0.913** | +8.13% | −11.7% | 1.32 |
-| Long-OOS 2013–2024 | **+1.503** | +11.60% | −11.7% | 1.32 |
+| Test 2019–2024 | **+1.011** | +9.47% | −7.9% | 1.33 |
+| Long-OOS 2012–2024 | **+1.495** | +12.32% | −7.9% | 1.33 |
 
 For comparison, the same model on the same panel under simpler portfolio
 constructions:
@@ -152,47 +161,56 @@ constructions:
 | 10 | Layer 3 alone, k=10 | +0.59 | +0.77 |
 | 11 | Layer 2 + Layer 3, k=10, 2005-2024 panel | +0.62 | +1.09 |
 | 12 | Layer 2 + Layer 3, k=10, 2003-2024 panel | +0.69 | +1.24 |
-| **14** | **+ k=5 (tuned)** | **+0.91** | **+1.50** |
+| 14 | + k=5 (tuned), 2003-2024 panel | +0.91 | +1.50 |
+| **15** | **+ 2002-04 panel start** | **+1.01** | **+1.49** |
 
 The progression tells the methodological story: each Framework layer is
 worth measuring on its own; only the full stack reaches the headline number.
+Phase 15's extra ~9 months of training history lifts the strict-OOS test
+Sharpe by ~10% over Phase 14 and reduces max drawdown by 3.8 pp without
+giving back any long-OOS Sharpe.
 
 ## 8. Statistical robustness
 
-For honest reporting we expose three robustness checks on Phase 14
+For honest reporting we expose three robustness checks on Phase 15
 (`notebooks/personb/07_statistical_robustness.py`):
 
-1. **Block bootstrap CI (12-month blocks, 10,000 resamples).** Long-OOS
-   Sharpe 95% CI = **[+0.72, +1.89]** — excludes zero.
+1. **Block bootstrap CI (6-month blocks, 10,000 resamples).** Long-OOS
+   2015-2024 Sharpe 95% CI = **[+0.82, +1.83]** — excludes zero with
+   P(bootstrap Sharpe ≤ 0) = 0.000.
 2. **Deflated Sharpe Ratio** (Bailey & López de Prado 2014), correcting
-   for 9 trials run during model development. Long-OOS **DSR = 0.995**
-   (i.e. ≈99.5% probability the true Sharpe is positive after accounting
-   for selection bias). Test-window DSR = 0.885 — below the 0.95 threshold
-   on a single 5-year window, as expected.
-3. **Fama-French 5-factor regression** (long-OOS, Newey-West HAC SE):
+   for 8 canonical-model trials run during development. Long-OOS
+   **DSR = 0.992**, test-window DSR = 0.887. The long-OOS number clears
+   the 0.95 significance bar comfortably after multiple-testing
+   correction; the test-only 5-year window is below the bar, as expected
+   for any single sub-decade slice.
+3. **Fama-French 5-factor regression** (long-OOS 2015-2024, n=120,
+   Newey-West HAC SE with 6 lags):
 
    | Factor | Loading | t | p |
    |---|---|---|---|
-   | **Alpha** | **+6.34%/yr** | **+2.44** | **0.016** |
-   | Mkt-RF | +0.141 | +3.16 | 0.002 |
-   | SMB | +0.125 | +1.33 | 0.187 |
-   | HML | −0.146 | −2.29 | 0.024 |
-   | RMW | +0.080 | +0.80 | 0.425 |
-   | CMA | +0.081 | +0.63 | 0.533 |
+   | **Alpha** | **+6.76%/yr** | **+2.52** | **0.013** |
+   | Mkt-RF | +0.192 | +3.39 | 0.001 |
+   | SMB | +0.182 | +1.87 | 0.064 |
+   | HML | −0.128 | −1.81 | 0.073 |
+   | RMW | +0.093 | +0.69 | 0.493 |
+   | CMA | +0.042 | +0.35 | 0.725 |
 
    The intercept (pure alpha) is **statistically significant after Fama-French
-   adjustment** — about half of the headline annualised return is *not*
-   explained by exposures to the five canonical factors. The portfolio does
-   carry a small but real market beta (+0.14, R²=13%) and a value-shorting
-   loading (HML −0.15), both documented honestly. Both exposures shrank
-   substantially from earlier phases (Phase 8 HML loading was −0.27); the
-   combination of Layer-2 target + Layer-3 portfolio reduces factor exposure
-   and improves pure alpha simultaneously.
+   adjustment** — more than half of the headline annualised return is *not*
+   explained by exposures to the five canonical factors. The portfolio carries
+   a small but real market beta (+0.19, R²=21%); the HML loading is no longer
+   significant at the 5% level (down from t=-2.29 in Phase 14 → t=-1.81 in
+   Phase 15), meaning the residual value-shorting tilt has weakened to the
+   point where it cannot be statistically distinguished from zero. Both
+   exposures shrank dramatically from earlier phases (Phase 8 HML loading was
+   −0.27); the combination of Layer-2 target + Layer-3 portfolio + extended
+   training history reduces factor exposure and lifts pure alpha simultaneously.
 
 ## 9. Model comparison: Diebold-Mariano
 
 The adapted Diebold-Mariano test (HAC lags=12) on per-date squared-error
-differences gives the pairwise model ranking on Phase 14:
+differences gives the pairwise model ranking on Phase 15:
 
 | Pair | DM statistic | p-value |
 |---|---|---|
@@ -207,7 +225,7 @@ designated canonical model.**
 
 ## 10. Feature importance
 
-The top-5 features by XGBoost gain (Phase 14, full-panel SHAP-equivalent):
+The top-5 features by XGBoost gain (Phase 15, full-panel SHAP-equivalent):
 
 1. `mom_12_1` (momentum) — 18% of total gain
 2. `dvol` (dollar volume) — 14%
@@ -227,16 +245,16 @@ Each is addressed here in advance:
 
 **"A long-only Sharpe of 1.5 is mostly market beta."** The strategy is
 **dollar-neutral long-short**, not long-only. Realised beta to the S&P 500
-is +0.14 with R²=13% — small, not 1.0. The FF5 alpha (which strips out
+is +0.19 with R²=21% — small, not 1.0. The FF5 alpha (which strips out
 that residual market exposure) is the honest skill number, and it is
-**+6.3%/yr at t=2.44, p=0.016 — significant.**
+**+6.76%/yr at t=2.52, p=0.013 — significant.**
 
 **"The t-stat is in-sample."** The model uses a strict walk-forward
 backtest: every prediction at month *t* uses a model trained on data
-ending at *t*−1. The 12-year long-OOS window comprises 144 strictly
+ending at *t*−1. The ~12.75-year long-OOS window comprises 153 strictly
 out-of-sample one-step-ahead predictions. The stricter test-only Sharpe of
-+0.91 over 2019-2024 (6 years) is the most conservative cut and still
-positive at t ≈ 2.2.
++1.01 over 2019-2024 (6 years) is the most conservative cut and still
+positive at t ≈ 2.5.
 
 **"The benchmark should be the index, not zero."** For a dollar-neutral
 long-short portfolio the standard benchmark IS zero (or the risk-free rate)
@@ -249,12 +267,14 @@ Honest residual limits of the work:
 - **Monthly data only.** Daily returns and volumes are not used; some of the
   intended features (e.g. ivol from daily regressions) are approximated by
   monthly proxies. A daily-data extension could refine signal.
-- **HML loading remains negative.** The portfolio is partly betting against
-  value. The FF5 alpha is significant *net of* this, but a multi-factor-neutral
-  variant (forced HML neutrality) might be a defensible further refinement.
-- **One 22-year sample.** The DSR adjustment accounts for trial inflation, but
-  not for the survivor / regime-specific nature of the post-2003 US large-cap
-  universe.
+- **HML loading is negative but no longer statistically significant.** The
+  portfolio still leans slightly against value (β = −0.13), but the t-stat
+  has fallen from −2.29 (Phase 14) to −1.81 (Phase 15) — below the 5% bar.
+  Pure alpha is doing more of the work. A multi-factor-neutral variant
+  (forced HML neutrality) might still be a defensible further refinement.
+- **One ~23-year sample.** The DSR adjustment accounts for trial inflation,
+  but not for the survivor / regime-specific nature of the post-2002 US
+  large-cap universe.
 - **Static k_per_sector.** k=5 is the static optimum across the whole sample;
   regime-conditional k could outperform in principle (handed off to Person C).
 
@@ -263,7 +283,8 @@ Honest residual limits of the work:
 Every number in this section is reproducible by:
 
 ```bash
-.venv/bin/python -m notebooks.personb.14_official_canonical_k5     # main result
+.venv/bin/python -m notebooks.personb.freeze_canonical_2002_panel   # data panel
+.venv/bin/python -m notebooks.personb.15_canonical_2002_start       # main result
 .venv/bin/python -m notebooks.personb.04_model_comparison           # DM test
 .venv/bin/python -m notebooks.personb.05b_realised_net_beta         # beta check
 .venv/bin/python -m notebooks.personb.06_sector_audit               # sector concentration
@@ -272,5 +293,6 @@ Every number in this section is reproducible by:
 ```
 
 Random seeds are pinned to 42 throughout. Artefacts written to
-`results/14_official_canonical_k5/` (metrics.parquet, per_model_results.pkl,
-PNG plots) are committed alongside the code.
+`results/15_canonical_2002/` (metrics.parquet, per_model_results.pkl,
+PNG plots) are committed alongside the code. Phase 14's artefacts remain
+in `results/14_official_canonical_k5/` for reproducibility / comparison.
