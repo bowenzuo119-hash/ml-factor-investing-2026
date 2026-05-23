@@ -1,0 +1,24 @@
+=== 1. Survivors: Sharadar vs yfinance monthly-return corr (>0.99) ===
+  [  OK] AAPL: corr=1.0000 over 120 months
+  [  OK] MSFT: corr=1.0000 over 120 months
+  [  OK] JNJ: corr=1.0000 over 120 months
+  [  OK] JPM: corr=1.0000 over 120 months
+  [  OK] PG: corr=1.0000 over 120 months
+
+=== 2. Delisted: SEP closeunadj vs SF1 `price` at datekeys ===
+  [HIGH] LEHMQ (Lehman Brothers): SEP 2715 days [1997-12-31..2008-10-15] | median |Δ| vs SF1 price = 100.0% over 43 datekeys
+  [  OK] BSC1 (Bear Stearns): SEP 2619 days [1997-12-31..2008-05-30] | median |Δ| vs SF1 price = 0.0% over 44 datekeys
+  [  OK] SIVBQ (SVB Financial): SEP 6351 days [1997-12-31..2023-03-28] | median |Δ| vs SF1 price = 0.0% over 101 datekeys
+  [  OK] WCOEQ (WorldCom): SEP 1583 days [1997-12-31..2004-04-19] | median |Δ| vs SF1 price = 0.0% over 19 datekeys
+  [  OK] ENRNQ (Enron): SEP 1731 days [1997-12-31..2004-11-17] | median |Δ| vs SF1 price = 0.0% over 16 datekeys
+
+=== 3. Splits: closeunadj shows the split, closeadj does not ===
+  [  OK] AAPL 2020-08-31 (4:1): closeunadj x0.258 (~0.25 expected), closeadj x1.034 (~1.0 expected)
+  [  OK] TSLA 2020-08-31 (5:1): closeunadj x0.225 (~0.20 expected), closeadj x1.126 (~1.0 expected)
+  [  OK] TSLA 2022-08-25 (3:1): closeunadj x0.332 (~0.33 expected), closeadj x0.997 (~1.0 expected)
+  [  OK] NVDA 2021-07-20 (4:1): closeunadj x0.248 (~0.25 expected), closeadj x0.991 (~1.0 expected)
+  [  OK] GOOGL 2022-07-18 (20:1): closeunadj x0.049 (~0.05 expected), closeadj x0.975 (~1.0 expected)
+
+============================================================
+Survivors corr >0.99: PASS | split adjustment: PASS
+Delisted block is informational (cross-check vs SF1, see above).
