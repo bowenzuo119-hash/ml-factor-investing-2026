@@ -32,10 +32,10 @@ from src.metrics import diebold_mariano
 # been run yet, fall back to Phase 3b (7 features) so this notebook still
 # runs end-to-end during development.
 SOURCE_PHASE_DIR = (
-    Path(__file__).resolve().parents[2] / "results" / "14_official_canonical_k5"
+    Path(__file__).resolve().parents[2] / "results" / "15_canonical_2002"
 )
 FALLBACK_PHASE_DIR = (
-    Path(__file__).resolve().parents[2] / "results" / "12_official_canonical"
+    Path(__file__).resolve().parents[2] / "results" / "14_official_canonical_k5"
 )
 RESULTS_DIR = (
     Path(__file__).resolve().parents[2] / "results" / "04_model_comparison"

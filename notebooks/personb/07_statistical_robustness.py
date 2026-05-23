@@ -43,7 +43,7 @@ RESULTS_DIR = (
 )
 PHASE_DIR = (
     Path(__file__).resolve().parents[2] / "results"
-    / "14_official_canonical_k5"
+    / "15_canonical_2002"
 )
 
 TEST_START = pd.Timestamp("2019-01-01")
@@ -51,10 +51,9 @@ TEST_END = pd.Timestamp("2024-12-31")
 LONG_OOS_START = pd.Timestamp("2015-01-01")  # full walk-forward range
 
 # We tried 6 distinct model/feature configurations along the way:
-# Phase 1 (5 feat raw), Phase 1.5 (7 feat raw), Phase 2 (7 feat sr),
-# Phase 3b (7 feat tuned), Phase 3c (8 feat tuned), Phase 8 (13 feat tuned).
+# Phase 1, 1.5, 2, 3b, 3c, 8, 14, 15: 8 canonical-model trials.
 # Used for deflation -- more trials = bigger penalty.
-N_TRIALS = 6
+N_TRIALS = 8
 BLOCK_BOOTSTRAP_BLOCK_SIZE = 6   # 6-month blocks
 BLOCK_BOOTSTRAP_N_ITERS = 10_000
 RANDOM_STATE = 42
@@ -313,20 +312,21 @@ def main() -> int:
     print(f"    P(bootstrap Sharpe <= 0) = {bb_long['p_le_zero']:.4f}")
 
     # ============== B. DEFLATED SHARPE ===============================
-    # Variance of Sharpe across our 5 trials (Phase 1, 1.5, 2, 3b, 3c)
+    # Sharpe across all canonical trials run during model development.
     print("\n[3/4] Deflated Sharpe (Bailey-Lopez de Prado 2014)...")
-    # Sharpe estimates from the previous phases on the test window
     trial_sharpes = {
         "Phase 1":   -0.032,
         "Phase 1.5": +0.556,
         "Phase 2":   +0.432,
         "Phase 3b":  +0.526,
         "Phase 3c":  +0.589,
-        # Phase 8 updated to the v0.3.0 engine value -- prior phases were
-        # measured on the old (refit-every-period) engine and haven't been
-        # re-run on v0.3.0. Methodologically this trial list is a slight
-        # mixture, but the DSR is robust to that level of imprecision.
+        # Phase 8 onward use the v0.3.0 engine (block-gated refit). Prior
+        # phases were measured on the old refit-every-period engine and
+        # haven't been re-run on v0.3.0; the DSR is robust to this slight
+        # mixture.
         "Phase 8":   +0.942,
+        "Phase 14":  +0.913,
+        "Phase 15":  +1.011,
     }
     print(f"  Sharpe across {N_TRIALS} trials: "
           f"{list(trial_sharpes.values())}")
