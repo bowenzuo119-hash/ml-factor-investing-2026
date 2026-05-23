@@ -50,9 +50,12 @@ PHASES = [
     ("01_first_real_backtest", "Phase 1", "5 features, raw target"),
     ("01b_with_value_factors", "Phase 1.5", "+ B/M and E/P (7 features)"),
     ("02_sector_relative_target", "Phase 2", "+ sector-relative target"),
-    ("03b_tuned_xgboost", "Phase 3b", "tuned XGBoost (7 feat)"),
     ("03c_tuned_xgboost_8features", "Phase 3c", "tuned + dvol (8 feat)"),
-    ("08_extended_fundamentals", "Phase 8", "+ ROE/ROA/D/E/AG/Acc (13 feat)"),
+    ("08_extended_fundamentals", "Phase 8", "13 feat + tuned (v0.3.0 eng)"),
+    ("10_layer3_sector_neutral", "Phase 10", "+ Layer 3 (sector-neutral)"),
+    ("11_layer2_plus_layer3", "Phase 11", "+ Layer 2+3 (2005-2024)"),
+    ("12_official_canonical", "Phase 12", "L2+L3 + 2003-2024 + k=10"),
+    ("14_official_canonical_k5", "Phase 14", "L2+L3 + 2003-2024 + k=5 (CANONICAL)"),
 ]
 
 MODELS = ["Lasso", "XGBoost", "NN"]
@@ -63,9 +66,12 @@ PHASE_COLORS = {
     "Phase 1":   "#9CA3AF",  # grey
     "Phase 1.5": "#3B82F6",  # blue
     "Phase 2":   "#10B981",  # green
-    "Phase 3b":  "#DC2626",  # red - tuned XGBoost, 7 features
     "Phase 3c":  "#7C3AED",  # purple - tuned + 8 features
-    "Phase 8":   "#F59E0B",  # amber - canonical: tuned + 13 features
+    "Phase 8":   "#F59E0B",  # amber - 13 features v0.3.0 engine
+    "Phase 10":  "#EC4899",  # pink - Layer 3 alone
+    "Phase 11":  "#06B6D4",  # cyan - Layer 2+3 combo (2005-2024)
+    "Phase 12":  "#FB923C",  # orange - Layer 2+3 + 2003-2024 + k=10
+    "Phase 14":  "#DC2626",  # red - CANONICAL: k=5
 }
 MODEL_LINESTYLES = {"Lasso": ":", "XGBoost": "-", "NN": "--"}
 
@@ -238,9 +244,13 @@ def metric_table(phases_data, metric_keys: list[tuple[str, str, str]]) -> Table:
                 else:
                     row.append("-")
             rows.append(row)
+    # Auto-size: label column gets 3 cm; phase columns share the rest
+    # of the available width (A4 width minus margins ~ 17.4 cm).
+    n_phases = len(PHASES)
+    avail = 17.0 - 3.0  # cm
+    phase_w = avail / n_phases
     t = Table(rows, hAlign="LEFT",
-              colWidths=[3.5 * cm, 2.1 * cm, 2.1 * cm, 2.1 * cm, 2.1 * cm,
-                         2.1 * cm, 2.1 * cm])
+              colWidths=[3.0 * cm] + [phase_w * cm] * n_phases)
     style = [
         ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -292,17 +302,18 @@ def main() -> int:
             LEAD,
         ),
         Paragraph(
-            "<b>The headline.</b> Tuned XGBoost on the 13-feature panel "
-            "(Phase 8), now running on backtest engine v0.3.0 with "
-            "block-gated refit: <b>+0.94 net Sharpe</b>, "
-            "<b>+7.9% annualised</b>, max drawdown <b>-5.5%</b> on the "
-            "2019-2024 test window. v0.3.0 refits only at the start of "
-            "each test_window block (not every period as the buggy v0.2.0 "
-            "engine did), which removed a layer of recency noise-fitting "
-            "and gave a 41% Sharpe lift over the same predictions. "
-            "Deflated Sharpe now clears 0.95 on both 5yr and 10yr OOS "
-            "windows; FF5 alpha = +3.83%/yr is borderline significant "
-            "(t=1.94, p=0.055). See Section 5 for the per-phase narrative.",
+            "<b>The headline (Phase 14, the final canonical).</b> Tuned "
+            "XGBoost on 13 features with the framework's full 3-layer "
+            "sector-neutrality stack: Layer 1 sector-relative ranks, "
+            "Layer 2 sector-relative target, Layer 3 sector-neutral "
+            "portfolio with k=5 per sector (the empirical optimum from "
+            "Phase 13's sensitivity sweep). Extended 2003-2024 training "
+            "panel, v0.3.0 engine. Test-window 2019-2024 Sharpe "
+            "<b>+0.89</b>; long-OOS 2013-2024 Sharpe <b>+1.50</b> "
+            "(t-stat <b>~5.2</b>, decisively significant). XGBoost IC "
+            "+0.019, max drawdown -11.7%. The journey from Phase 1's "
+            "Sharpe of -0.03 to Phase 14's +1.50 long-OOS is documented "
+            "in Section 5.",
             NOTE,
         ),
     ]

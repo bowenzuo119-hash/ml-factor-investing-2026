@@ -32,7 +32,7 @@ RESULTS_DIR = (
 )
 PHASE_DIR = (
     Path(__file__).resolve().parents[2] / "results"
-    / "10_layer3_sector_neutral"
+    / "14_official_canonical_k5"
 )
 PANEL_FILE = (
     Path(__file__).resolve().parents[2] / "data" / "processed"
