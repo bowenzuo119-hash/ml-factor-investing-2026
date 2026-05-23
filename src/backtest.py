@@ -17,6 +17,11 @@ Methodology mirrors Gu, Kelly & Xiu (2020): monthly cross-sectional ranking,
 top-decile long / bottom-decile short, equal-weighted within decile, rebalanced
 on the last trading day of each month. Transaction costs are charged on
 turnover at `transaction_cost_bps` basis points per dollar traded.
+
+Survivorship: pass `eligible_universe_fn` (a `date -> set[str]` callable, e.g.
+wrapping `data_loader.load_sp500_membership`) to restrict both prediction-time
+trading and training labels to point-in-time index members. Omitting it trades
+the full `returns.columns` union (survivorship-biased) and is for tests only.
 """
 
 from __future__ import annotations
@@ -147,6 +152,7 @@ def run_walk_forward_backtest(
     transaction_cost_bps: float = 10.0,
     regime_fn: RegimeFn | None = None,
     sector_map: dict[str, str] | pd.Series | None = None,
+    eligible_universe_fn: Callable[[pd.Timestamp], set[str]] | None = None,
     long_quantile: float = 0.9,
     short_quantile: float = 0.1,
     rebalance: str = "M",
@@ -217,6 +223,16 @@ def run_walk_forward_backtest(
         but ``sector_map`` is ``None``, the engine warns once and falls back
         to global quantile selection. Assets missing from the map are bucketed
         under ``"UNKNOWN"``. Build it from ``factors.load_sector_map()``.
+    eligible_universe_fn : Callable[[pd.Timestamp], set[str]], optional
+        Point-in-time universe filter. If given, ``eligible_universe_fn(date)``
+        returns the set of tickers tradable at that rebalance date; only those
+        are predicted on, and training labels are restricted to stocks that
+        were eligible on each feature's formation date. ``None`` (default)
+        leaves behaviour unchanged — every ``returns.columns`` asset with a
+        non-NaN next return is eligible (survivorship-biased; tests only).
+        Wrap ``data_loader.load_sp500_membership`` to build it::
+
+            def universe_at(date): return set(load_sp500_membership(asof=date))
     long_quantile, short_quantile : float
         Cross-sectional quantile cutoffs for the long and short legs,
         used when ``regime_fn`` is ``None`` or when the regime dict does
@@ -244,9 +260,13 @@ def run_walk_forward_backtest(
     -----
     * No look-ahead: features at date `t` are used to predict returns
       realised AFTER `t`. The engine asserts this with an explicit shift.
-    * Survivorship: only assets present in `returns.columns` on a given
-      rebalance date are eligible. Pass the point-in-time universe from
-      `data_loader.load_sp500_membership` to do this correctly.
+    * Survivorship: pass `eligible_universe_fn` to enforce point-in-time
+      universe membership — at each rebalance only the assets it returns for
+      that date are tradable, and training labels are restricted the same
+      way (a stock that was not an index member on a feature's formation date
+      is not a training example). Without it, every asset in `returns.columns`
+      with a non-NaN next return is eligible, which is survivorship-biased —
+      acceptable for the sanity tests, not for a reported backtest.
     * Transaction costs are charged at the moment of rebalance, on the
       L1 weight change, BEFORE the regime leverage is applied (so a
       regime-induced de-leverage also pays costs). [NOT YET IMPLEMENTED
@@ -320,11 +340,21 @@ def run_walk_forward_backtest(
             next_date_map = dict(
                 zip(train_dates, rebal_dates[i - train_window + 1 : i + 1])
             )
+            # Point-in-time universe per training (feature) date: a stock is a
+            # valid training example only if it was in the investable universe
+            # on the date its feature was formed. Built once per refit.
+            eligible_at_train = (
+                {d: set(eligible_universe_fn(d)) for d in train_dates}
+                if eligible_universe_fn is not None else None
+            )
             y_train_rows = []
             for (d, asset) in X_train.index:
                 nd = next_date_map.get(d)
                 if nd is None:
                     y_train_rows.append(float("nan"))
+                    continue
+                if eligible_at_train is not None and asset not in eligible_at_train[d]:
+                    y_train_rows.append(float("nan"))  # not in PIT universe at d
                     continue
                 if asset in returns.columns:
                     y_train_rows.append(returns.at[nd, asset])
@@ -348,10 +378,16 @@ def run_walk_forward_backtest(
         if rebal_t not in features.index.get_level_values(0):
             continue
         X_pred = features.loc[(rebal_t, slice(None)), :]
-        # Eligible: must also have a non-NaN return at next_t
+        # Eligible: in the point-in-time universe at rebal_t (if a universe
+        # function was supplied) AND has a non-NaN return to realise at next_t.
+        eligible_now = (
+            eligible_universe_fn(rebal_t) if eligible_universe_fn is not None else None
+        )
         eligible_assets = [
             a for (_, a) in X_pred.index
-            if a in returns.columns and pd.notna(returns.at[next_t, a])
+            if a in returns.columns
+            and pd.notna(returns.at[next_t, a])
+            and (eligible_now is None or a in eligible_now)
         ]
         if not eligible_assets:
             continue
@@ -501,6 +537,7 @@ def run_walk_forward_backtest(
         "avg_monthly_turnover": float(turnover_series.mean()),
         "regime_fn_applied": regime_fn is not None,
         "sector_neutral_available": sector_map is not None,
+        "pit_universe_applied": eligible_universe_fn is not None,
         "avg_leverage": float(leverage_series.mean()),
         "leverage_range": (float(leverage_series.min()), float(leverage_series.max())),
         "random_state": random_state,
@@ -537,7 +574,13 @@ def run_walk_forward_backtest(
 #           refit gated by `test_window` instead of every rebalance. Adding an
 #           optional kwarg is backward-compatible, but the refit change alters
 #           results for test_window > 1, so it's a minor-version bump.
-INTERFACE_VERSION = "0.3.0"
+#   0.4.0 - add optional `eligible_universe_fn` param: point-in-time universe
+#           filter applied to both prediction-time eligibility and training
+#           labels, closing a survivorship leak (the engine previously traded
+#           any name in returns.columns with a non-NaN return, regardless of
+#           index membership). Backward-compatible: None reproduces 0.3.0
+#           results bit-identically.
+INTERFACE_VERSION = "0.4.0"
 
 
 # --------------------------------------------------------------------------

@@ -831,6 +831,19 @@ The HML loading remains a real feature exposure — the model is partly betting 
 **Revisit if:** an out-of-sample year (2025+) breaks the pattern, or if Bowen's daily-data extension lets us refine the dvol / ivol features (then Phase 16 would re-tune on the daily-extended features).
 
 
+## 2026-05-23 — Engine v0.4.0: point-in-time universe filter (survivorship fix)
+
+**Context:** A correctness audit on `personb-models` flagged a survivorship leak in `run_walk_forward_backtest`: the eligible cross-section at each rebalance was `returns.columns` (the full union of every ticker that ever touched the panel), filtered only by a non-NaN next return. So a 2012 rebalance could trade names that were not S&P 500 members in 2012 (e.g. TSLA, ENPH) because their returns exist in CRSP/yfinance. Training labels had the same leak. The docstring and DATA_AND_ENGINE_SECTION §2 both claimed point-in-time enforcement that the engine did not actually do.
+
+**Options considered:** (a) Filter the universe upstream in Person B's feature panel — keeps the engine simple but pushes a correctness guarantee into every caller and is easy to forget. (b) Add an optional `eligible_universe_fn: date -> set[str]` to the engine (same style as `regime_fn` / `sector_map`), applied to both prediction-time eligibility and training labels — one authoritative place, backward-compatible. (c) Hard-wire `load_sp500_membership` into the engine — couples the generic engine to one specific universe.
+
+**Decision:** Option (b). `INTERFACE_VERSION` → **0.4.0**. When `eligible_universe_fn` is supplied, only its members are tradable at each rebalance and only members on a feature's formation date become training examples; `None` reproduces 0.3.0 bit-identically (sanity gate unchanged).
+
+**Reasoning:** Keeps the engine universe-agnostic while making PIT enforcement explicit and opt-in, consistent with the existing optional-kwarg pattern. Verified: with the filter, **0** ineligible assets are traded; without it, a 2012–2019 RandomModel run traded **726** non-member positions — confirming the leak was real and material. The Sharpe-magnitude impact on the real model is Person B's to measure on Phase 15 (audit rule: disclose in the report if the with/without gap exceeds ~5% absolute Sharpe).
+
+**Revisit if:** we add a second universe (e.g. Russell 1000) — the same `eligible_universe_fn` hook covers it with no engine change.
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
