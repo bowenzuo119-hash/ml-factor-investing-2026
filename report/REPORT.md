@@ -111,7 +111,8 @@ A caveat is that the final 2-state HMM was selected using crisis-detection perfo
 The operational overlay is available for the 2010–2024 out-of-sample window rather than the full 2005–2024 sample, because 2005–2009 is used as the initial burn-in / training window before the first walk-forward regime prediction in January 2010.
 
 **Overlay rule.** The regime overlay does not change *which* stocks are chosen
-by the alpha model; it changes portfolio aggressiveness and breadth:
+by the alpha model, nor how many (breadth is held fixed at k = 5, 10% / 10%
+across regimes); it changes only portfolio aggressiveness via gross leverage:
 
 | Regime | Gross leverage | k per sector | Long/short quantile |
 |---|---|---|---|
@@ -120,10 +121,13 @@ by the alpha model; it changes portfolio aggressiveness and breadth:
 
 Operationally, these parameters are written to
 `results/regime_overlay_rules.csv` and consumed by the engine through
-`src.regime.make_regime_fn`. When the engine receives both `k_per_sector` and a
-sector map, it applies top-k / bottom-k selection within sector, so the
-overlay tightens both gross exposure and cross-sectional breadth in crisis
-states.
+`src.regime.make_regime_fn`. With a sector map and `k_per_sector` the engine
+holds breadth fixed (top-5 / bottom-5 per sector in every regime); the only
+quantity the overlay changes is the gross leverage multiplier, which it cuts
+from 1.00× in calm states to 0.40× in crisis states. This is the leverage-only
+specification — an earlier draft also tightened `k` and the quantiles in
+crises, but an ablation showed the breadth lever hurt the drawdown profile
+while the leverage lever helped, so breadth is now held constant.
 
 **Interpretation.** The 2-regime specification is the canonical one in the
 report because it is the walk-forward-selected model and because the economic
