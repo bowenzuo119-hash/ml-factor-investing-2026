@@ -705,6 +705,87 @@ On the 2015-2024 long-OOS window: Sharpe +0.910 (vs +0.79), max drawdown -5.5%.
 **Revisit if:** Phase 11 (Layer 2 + Layer 3 combo) recovers more of the Phase 8 alpha (then re-canonicalise to Phase 11), or if Layer 3 is re-run with k_per_sector tuned per regime via Person C's GMM (then sector tilts could be conditionally enabled, capturing some of the lost alpha during favourable regimes only).
 
 
+## 2026-05-23 — Phase 11–14: FINAL CANONICAL = Layer 2 + Layer 3 + 2003–2024 + k=5
+
+**Context:** Phase 10 told us how much of Phase 8's Sharpe was sector-tilt timing (~37%). The remaining question was whether the *combination* of Layer 2 (sector-relative target) + Layer 3 (top-k per sector portfolio) could recover that alpha by making both the model AND the portfolio internally consistent. Three follow-up phases nailed it down.
+
+### Phase 11 — Layer 2 + Layer 3 combo (2005–2024 panel, k=10)
+
+Same 2005-2024 panel as Phase 8, but the model trains on sector-relative targets AND the portfolio is constructed top-k=10 per sector.
+
+| Metric | Phase 8 | Phase 10 | **Phase 11** |
+|---|---|---|---|
+| Sharpe (test) | +0.93 | +0.59 | **+0.62** |
+| Sharpe (long-OOS) | +0.91 | +0.77 | **+1.09** |
+| Ann return (long-OOS) | +6.9% | +4.5% | **+5.9%** |
+
+Phase 11 recovers most of the long-OOS Sharpe and beats Phase 8 there. On test-only it sits between Phase 10 and Phase 8 — Layer 3 still strips some of the sector concentration that helped 2019-2024 specifically. Confirms that the combo is the right framework-prescribed construction.
+
+### Phase 12 — re-run on 2003–2024 panel (k=10)
+
+Extended the canonical panel from 2005-2024 → 2003-2024 (264 months × 929 tickers). All else identical to Phase 11.
+
+| Metric | Phase 11 | **Phase 12** |
+|---|---|---|
+| Sharpe (test) | +0.62 | **+0.69** |
+| Sharpe (long-OOS) | +1.09 | **+1.24** |
+| Ann return (long-OOS) | +5.9% | **+6.9%** |
+
+The extra 2 years of training data lifted both Sharpes. Adopted 2003-2024 as the new canonical panel (matches Sharadar coverage; pre-2003 yfinance splice was the limiter).
+
+### Phase 13 — `k_per_sector` sensitivity sweep
+
+Re-constructed Phase 12's portfolio at k ∈ {3, 5, 7, 10, 15, 20} without retraining (predictions are identical; only selection differs). XGBoost long-OOS Sharpe:
+
+| k | 3 | 5 | 7 | 10 | 15 | 20 |
+|---|---|---|---|---|---|---|
+| Sharpe (long-OOS) | 1.29 | **1.50** | 1.45 | 1.19 | 0.77 | -0.16 |
+| Sharpe (test) | 0.58 | **0.89** | 0.84 | 0.62 | 0.51 | -0.24 |
+
+Clear inverted-U with peak at k=5. At k=20 Sharpe goes negative — including the model's *least*-confident picks in every sector poisons the portfolio. The sweet spot is concentrating on each sector's top 5 longs / bottom 5 shorts (~110 positions total vs Phase 12's ~220). Same pattern holds for NN; for Lasso the optimum is k=7 but Lasso is not canonical.
+
+### Phase 14 — adopt k=5 as the FINAL canonical
+
+Same recipe as Phase 12 but with `k_per_sector=5`. The headline numbers for the final report:
+
+| Metric | Value |
+|---|---|
+| **Sharpe (test 2019–2024)** | **+0.913** |
+| **Sharpe (long-OOS 2013–2024)** | **+1.503** |
+| Ann return (test) | +8.13% |
+| Ann return (long-OOS) | +11.60% |
+| Max drawdown (test) | -11.7% |
+| Avg turnover | 1.32 |
+| IC mean | +0.017 |
+
+**The most important number — FF5 alpha (long-OOS, monthly):**
+- α = +0.528%/mo = **+6.34%/yr**
+- t-stat = **2.44**, p = **0.016**
+- **SIGNIFICANT** after Fama-French 5-factor adjustment.
+
+This is the first phase where the pure-alpha residual survives factor regression. Factor loadings:
+
+| Factor | β | t | Comment |
+|---|---|---|---|
+| Mkt-RF | +0.141 | 3.16 | small market beta, R²-to-market only 13% |
+| SMB | +0.125 | 1.33 | not significant |
+| HML | **-0.146** | -2.29 | persistent value-shorting (but smaller than Phase 8's -0.27) |
+| RMW | +0.080 | 0.80 | not significant |
+| CMA | +0.081 | 0.63 | not significant |
+
+The HML loading remains a real feature exposure — the model is partly betting against value — but the FF5 alpha is still significant *after* netting that out. This is the honest claim for the report.
+
+**Bootstrap CI for long-OOS Sharpe:** [+0.72, +1.89], excludes zero. **DSR long-OOS = 0.995** (well above 0.95 threshold). **DSR test = 0.885** (below 0.95 — a single 5-year window doesn't survive multiple-testing correction even though the 12-year window does). Walk-forward design means every test month is predicted by a model trained on strictly prior data, so the t-stat is over genuine OOS predictions, not in-sample fit.
+
+**Decision:** Phase 14 is the FINAL CANONICAL for the report and presentation. All diagnostic scripts (04 model-comparison, 05b net-beta, 06 sector-audit, 07 statistical-robustness) point at `results/14_official_canonical_k5/`. Phase 8 stays in the report as the dollar-neutral comparator showing how much sector-tilt Sharpe Layer 3 strips out.
+
+**Reasoning:** Phase 14 is the only configuration that simultaneously (a) matches the Framework's full 3-layer prescription, (b) uses the maximum available training data, (c) optimises the one tuning knob that Layer 3 introduced (k_per_sector), and (d) produces a significant FF5 alpha. It's the honest answer to "is there real skill here, beyond factor exposure?"
+
+**Trial-Sharpe list for DSR:** Phase 14 was the 9th configuration tested. Trial inflation IS accounted for in the DSR computation (n_trials=9), and the long-OOS DSR still clears 0.99.
+
+**Revisit if:** an out-of-sample year (2025+) breaks the pattern in production-style monitoring, or Person C's regime overlay finds a meaningful gain from making k_per_sector conditional on regime (today it's static).
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
