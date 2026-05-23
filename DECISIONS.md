@@ -855,6 +855,17 @@ The HML loading remains a real feature exposure — the model is partly betting 
 **Revisit if:** the overlay is ever re-keyed to trading-day month-ends at source (then exact match would also work, but period match stays correct and is harmless).
 
 
+## 2026-05-23 — Engine v0.5.0: separate training vs trading PIT filter
+
+**Context:** With the v0.4.0 point-in-time filter applied to *both* training labels and trading, the honest Phase 15 Sharpe is expected to drop from the survivorship-biased +1.49. Person B wants to attribute the drop: is it the *training-data* restriction (model learns from fewer stocks) or the *trading-universe* restriction (can only hold index members)? `eligible_universe_fn` applied to both at once, so the two couldn't be separated.
+
+**Decision:** Add `apply_pit_to_training: bool = True`. Default True = v0.4.0 behaviour (PIT on both, reproduces bit-identically). Set False with an `eligible_universe_fn` supplied → train on the full panel but trade only PIT members, isolating the trading restriction. Chose the boolean flag over a second `eligible_universe_train_fn` kwarg: B's diagnostic only needs full-vs-PIT on training, not an independent third universe, so the flag is the smaller API surface (YAGNI).
+
+**Reasoning:** Lets B run "train on full / trade on PIT" with one flag. Verified: default reproduces v0.4.0 (sanity 3/3 unchanged); flag=False changes results while prediction-side PIT stays on; new metadata key `pit_applied_to_training` records which mode ran.
+
+**Revisit if:** we ever need a genuinely different training universe (then add the `eligible_universe_train_fn` callable; the flag stays as the common case).
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
