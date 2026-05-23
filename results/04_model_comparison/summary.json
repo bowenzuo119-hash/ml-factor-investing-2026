@@ -1,43 +1,43 @@
 {
-  "source_phase": "08_extended_fundamentals",
+  "source_phase": "14_official_canonical_k5",
   "test_start": "2019-01-01",
   "test_end": "2024-12-31",
   "newey_west_lags": 12,
   "per_model_mse": {
-    "Lasso": 0.019595387829155177,
-    "XGBoost": 0.020380375572868367,
-    "NN": 0.019602883936038932
+    "Lasso": 0.019770461576214596,
+    "XGBoost": 0.019776735097729318,
+    "NN": 0.019754439274203343
   },
   "pairs": [
     {
       "model_a": "Lasso",
       "model_b": "XGBoost",
-      "dm_stat": -2.780194962232379,
-      "p_value": 0.005432627183112659,
-      "mean_diff": -0.0008149640599088136,
-      "n_dates": 71,
-      "winner": "Lasso",
-      "significance": "*** (p<0.01)"
-    },
-    {
-      "model_a": "Lasso",
-      "model_b": "NN",
-      "dm_stat": -1.1040036220386849,
-      "p_value": 0.2695915664959412,
-      "mean_diff": -6.728681509737306e-06,
+      "dm_stat": -0.5938702698875378,
+      "p_value": 0.5525988850975465,
+      "mean_diff": -8.360381171734035e-06,
       "n_dates": 71,
       "winner": "Lasso",
       "significance": "(n.s.)"
     },
     {
-      "model_a": "XGBoost",
+      "model_a": "Lasso",
       "model_b": "NN",
-      "dm_stat": 2.776117238311894,
-      "p_value": 0.005501236743703064,
-      "mean_diff": 0.0008082353783990764,
+      "dm_stat": 1.6056452824323715,
+      "p_value": 0.10835187007239044,
+      "mean_diff": 1.4502666352849073e-05,
       "n_dates": 71,
       "winner": "NN",
-      "significance": "*** (p<0.01)"
+      "significance": "(n.s.)"
+    },
+    {
+      "model_a": "XGBoost",
+      "model_b": "NN",
+      "dm_stat": 1.462946909275355,
+      "p_value": 0.14348190676564698,
+      "mean_diff": 2.2863047524583106e-05,
+      "n_dates": 71,
+      "winner": "NN",
+      "significance": "(n.s.)"
     }
   ]
 }
