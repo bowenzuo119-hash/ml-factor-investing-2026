@@ -1312,6 +1312,47 @@ def load_sp500_membership(asof: str) -> list[str]:
     return sorted(active.unique().tolist())
 
 
+def load_sp500_ever_membership(asof: str) -> list[str]:
+    """Return all tickers that were S&P 500 members at ANY point UP TO `asof`.
+
+    This is the "relaxed PIT" universe: cumulative watchlist of every name
+    that has been an index member by the as-of date. Used to expand the
+    investable universe beyond the strict point-in-time roster WITHOUT
+    re-introducing look-ahead bias. A stock that joined the S&P after
+    `asof` is NOT included.
+
+    Use cases:
+    * Trade former members on the way down (they're not in the current
+      index but were when we started watching).
+    * Avoid the narrow ~500-name strict-PIT universe at the cost of
+      including delisted/distressed names in the eligible pool.
+
+    Parameters
+    ----------
+    asof : str
+        ISO date (``"YYYY-MM-DD"``). Returns the cumulative membership
+        from index inception through end-of-day on this date.
+
+    Returns
+    -------
+    list[str]
+        Tickers, sorted alphabetically. The list grows monotonically as
+        `asof` advances (former members never drop out).
+
+    Raises
+    ------
+    ValueError
+        If ``asof`` cannot be parsed as a date.
+    """
+    asof_ts = pd.Timestamp(asof)
+    table = _load_membership_table()
+    # A ticker is "ever a member by asof" iff its spell started by then.
+    # We do NOT impose end_date <= asof — former members stay in the list.
+    started = table["start_date"] <= asof_ts
+    ever = table.loc[started, "ticker"]
+    return sorted(ever.unique().tolist())
+
+
 # --------------------------------------------------------------------------
 # Firm fundamentals (Sharadar SF1 via Nasdaq Data Link)
 #
