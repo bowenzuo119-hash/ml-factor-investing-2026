@@ -16,15 +16,20 @@ Xiu (2020). A gradient-boosted model (XGBoost) forecasts the cross-section of
 next-month returns from 13 firm features spanning price trend, liquidity,
 volatility, and Fama-French value/quality; forecasts are turned into a
 sector-neutral top-/bottom-quantile portfolio; and a Gaussian-mixture / HMM
-regime model scales gross leverage down in detected crises. Evaluated under a
-strict walk-forward backtest with transaction costs, the canonical XGBoost
-strategy earns a net Sharpe of **1.49 (long-OOS) / 1.01 (2019–2024 test)** with
-a maximum drawdown of **−7.9%**, and a long-OOS Deflated Sharpe Ratio of
-**0.992** (clearing the 0.95 significance threshold after correcting for the
-trials run during development). We are candid about the residual concerns: the
-6-year test-window DSR (0.887) is just below significance, and Fama-French
-alpha is not statistically significant — a meaningful fraction of the edge is
-factor exposure rather than uncorrelated skill.
+regime model scales gross leverage down in detected crises. An initial
+walk-forward backtest produced an apparent net Sharpe of **+1.50** (long-OOS) —
+but a survivorship audit found the engine was trading stocks *before* they
+entered the index (e.g. holding Tesla in 2012, eight years before it joined the
+S&P 500). Enforcing a point-in-time investable universe **collapses the
+out-of-sample Sharpe to roughly zero**: −0.27 under a strict train-and-trade PIT
+filter, +0.18 under the more lenient train-on-full-cross-section / trade-PIT
+setup that matches GKX. **The central result of this project is therefore
+methodological**: most of the apparent alpha was look-ahead bias, and the
+strategy shows no statistically meaningful out-of-sample edge once survivorship
+is handled correctly. We document the full audit trail and the diagnostics that
+attribute the collapse to its sources. (A final hyperparameter re-tune on the
+PIT panel is pending; the prior across every honest configuration is no
+material alpha.)
 
 ---
 
@@ -39,8 +44,11 @@ factor exposure rather than uncorrelated skill.
   (`run_walk_forward_backtest`): a point-in-time data pipeline (§2), a
   cross-sectional alpha model (§3), and a regime-conditioned leverage overlay
   (§4). The seam is versioned so each part iterates independently.
-- **Headline result.** *(pull the §5 numbers)*.
-- **What we got honestly wrong / right.** Forward-reference §6 limitations.
+- **Headline result.** An apparent +1.5 Sharpe that **collapses to ~0 once a
+  point-in-time universe is enforced** — the apparent edge was look-ahead bias
+  (§5). The reusable infrastructure, not the alpha, is the deliverable.
+- **What we got honestly wrong / right.** Forward-reference §6 limitations; the
+  central one is that we caught and quantified our own survivorship leak.
 
 ---
 
@@ -108,67 +116,109 @@ OOS distribution is **81% calm / 19% crisis**.
 | Crisis | 0.40× | 2 | 4% / 4% |
 
 It is delivered as `results/regime_overlay_rules.csv` and consumed by the engine
-via `regime.make_regime_fn`. Expected effect: a modest Sharpe cost for a
-material drawdown improvement in crisis episodes.
+via `regime.make_regime_fn`. Measured effect (§5 ablation): the leverage lever
+improves Sharpe but the breadth-tightening lever worsens drawdown; net of both
+the overlay does not help, and on the honest PIT panel there is no alpha to
+protect.
 
 *[TODO (Person C): expand model-selection detail; add the regime-shaded
 S&P 500 chart (`results/regime_walkforward_chart.png`).]*
 
 ---
 
-## 5. Integrated Results
+## 5. Integrated Results — the survivorship correction
 
-The canonical configuration is **XGBoost + 13 features + 3-layer sector-neutral
-(k = 5) + regime overlay**, trained from 2002-04 (`results/15_canonical_2002/`),
-walk-forward with 10 bps/side costs.
+Our first walk-forward run of the canonical configuration (XGBoost, 13 features,
+3-layer sector-neutral, trained from 2002-04) produced an apparent **net Sharpe
+of +1.50 long-OOS / +1.01 test**. A correctness audit then found the engine's
+eligible cross-section was the *full union of every ticker that ever appeared in
+the panel*, filtered only by data availability — so at a 2012 rebalance it could
+(and did) trade names like Tesla, Enphase, Generac, and ServiceNow years before
+they joined the S&P 500. Those names were *selected into the index because they
+had already been winners*, so trading them early is pure look-ahead.
 
-| Window | Net Sharpe | Ann. return | Max drawdown | DSR |
+Enforcing a point-in-time investable universe (`load_sp500_membership` at every
+rebalance; engine v0.4.0 / v0.5.0) removes the leak. The effect is decisive:
+
+| Configuration | Sharpe (long-OOS) | Sharpe (test) | Ann. return | Max drawdown |
 |---|---|---|---|---|
-| Long-OOS (2013–2024) | **+1.49** | +12.3% | −7.9% | **0.992** |
-| Test-only (2019–2024) | **+1.01** | +9.5% | −7.9% | 0.887 |
+| No PIT (the biased +1.5) | +1.50 | +1.01 | +12.3% | −7.9% |
+| **Full PIT** (train + trade) | **−0.27** | −0.54 | −2.3% | −36% |
+| **Train-full / trade-PIT** (GKX-style, no look-ahead) | **+0.18** | −0.21 | +1.5% | −25% |
 
-Robustness (§8 of the Alpha Model section): 2015–2024 bootstrap Sharpe 95% CI
-**[+0.82, +1.83]**, P(Sharpe ≤ 0) = 0.000; long-OOS **DSR = 0.992** after
-correcting for the trials run during development. Diebold-Mariano selects
-XGBoost over Lasso.
+**Reading.** The survivorship leak accounted for essentially the entire apparent
+edge. Even the most lenient *honest* configuration — train on the full
+cross-section (legitimate: only *trading* non-members was the leak; learning
+from their realised past returns is not) and trade only index members, which
+matches GKX's own setup — yields a long-OOS Sharpe of just **+0.18** and a
+*negative* test-window Sharpe, with deep drawdowns. A final Optuna re-tune on the
+PIT panel is pending, but starting from +0.18 it is very unlikely to reach a
+meaningful level.
 
-*[TODO: regime overlay ablation — report with-overlay vs no-overlay net Sharpe
-and max drawdown side by side, to show the overlay earns its keep (the cleanest
-single table to justify Person C's contribution). Compare `results/14_*` or a
-no-regime run vs `results/15_canonical_2002/`.]*
+**Decomposition.** Two sub-causes, separated with the `apply_pit_to_training`
+flag: the *trading* restriction (can't hold future joiners) is the dominant
+effect; the *training* restriction (learning on fewer stocks) explains the
+−0.27 → +0.18 recovery between full-PIT and train-full — roughly a third of the
+gap — with the residual still ~0. Reproduce: `python -m
+notebooks.persona.honest_headline_check`.
 
-*[TODO: insert the headline equity curve and drawdown plot —
-`results/15_canonical_2002/` or `results/presentation_plots/`.]*
+**Regime overlay (ablation).** On the pre-PIT panel, decomposing Person C's
+overlay shows the leverage lever *helps* (+1.50 → +1.56) but the
+breadth-tightening lever (`k` 5→2 in crisis) *hurts* (max drawdown blows out to
+−11.9%); the bundled overlay nets negative. On the honest PIT panel the question
+is moot — there is no alpha to protect. Reproduce: `python -m
+notebooks.persona.regime_ablation_check`.
 
 ---
 
 ## 6. Limitations and honest findings
 
-- **Test-window significance is borderline.** Long-OOS DSR (0.992) clears 0.95,
-  but the stricter 6-year 2019–2024 test window sits at **0.887** — just below.
-  The long-OOS result is the significant one; the short window is suggestive.
-- **Alpha is largely factor exposure.** Fama-French alpha is not significant
-  (t ≈ 0.8); the strategy loads negatively on HML (short-value tilt) and
-  positively on the market. The edge is real but is partly compensated factor
-  risk, not pure uncorrelated skill.
-- **Free-data coverage gap.** ~10–16% of historical tickers (delisted/renamed
-  before ~2022) are unavailable in yfinance under their old symbol; their
-  history ends at the CRSP cutoff. The point-in-time universe limits the bias
-  but does not erase it.
-- **One 22-year sample.** The DSR adjustment accounts for the trials we ran, but
-  it remains a single historical path.
-- *[TODO (Person C): regime model's walk-forward crisis-detection rate is lower
-  out-of-sample than in-sample — state the honest OOS number.]*
+- **The headline result is negative — and that is the finding.** Once
+  survivorship is corrected, the strategy has no statistically meaningful
+  out-of-sample alpha; the apparent +1.5 Sharpe was look-ahead. Everything below
+  is secondary to this.
+- **Two correctness bugs found and fixed (audit trail in DECISIONS).**
+  (1) *Survivorship*: the engine traded any ticker with available data,
+  including future S&P joiners — fixed with the point-in-time
+  `eligible_universe_fn` (engine v0.4.0/v0.5.0). (2) *UNKNOWN-sector bucket*:
+  ~440 delisted/renamed tickers collapsed into a single "UNKNOWN" pseudo-sector,
+  distorting the sector-neutral construction — fixed on the feature side.
+- **yfinance coverage gap.** The investable panel is ~700 tickers/month
+  pre-splice (CRSP, 2002–2022) vs ~510 post-splice (yfinance, 2023–2024) — a
+  ~200-name gap of delisted/renamed historicals yfinance can't reach under their
+  old symbols (PIT retention ~60% vs ~95%). It also drops a few 2023–24 index
+  members that delisted (SIVB, FRC) from the PIT panel. We chose not to pay for a
+  Sharadar SEP upgrade: better data does not recover an alpha that isn't there
+  (DECISIONS 2026-05-23).
+- **Regime model.** HMM n=2 was selected by crisis-detection rate on *known*
+  stress periods (some hindsight in model selection); the overlay covers
+  2010–2024 (2005–09 was walk-forward burn-in). Its leverage lever helps and its
+  breadth lever hurts (§5), but the question is moot on the honest panel.
+- **One 22-year sample, US large-cap only.** A single historical path; results
+  need not generalise to other universes or periods.
 
 ---
 
 ## 7. Conclusion
 
-*[TODO: 2 paragraphs. The defensible claim: a disciplined, survivorship-aware,
-look-ahead-controlled ML pipeline produces a long-OOS net Sharpe ~1.5 that is
-statistically significant after multiple-testing correction, with a regime
-overlay that *(quantify once the §5 ablation lands)*. The honest claim: the
-edge is partly factor exposure and the short-window result is borderline.]*
+A disciplined ML factor pipeline on the S&P 500 shows **no statistically
+meaningful out-of-sample alpha once survivorship and look-ahead are handled
+correctly.** The apparent +1.5 Sharpe of our first canonical was almost entirely
+the artifact of trading future index entrants; under a point-in-time universe
+the honest out-of-sample Sharpe is roughly zero (−0.27 strict-PIT, +0.18
+train-full / trade-PIT).
+
+We regard this as the project's most valuable result. It is a concrete,
+reproducible demonstration of how readily a naive ML backtest manufactures
+spurious alpha, and of the audit discipline — point-in-time universe
+enforcement, a Random/Oracle/Uniform sanity gate, and decomposed diagnostics —
+required to catch it; precisely the failure mode López de Prado (2018)
+documents. The *infrastructure* is sound and reusable (a point-in-time data
+pipeline, a versioned walk-forward engine with the survivorship fix, and a
+sanity-gated backtest); the *alpha* is not there. A genuine edge, if one exists,
+would more plausibly come from a broader investable universe (GKX use the full
+CRSP cross-section, not 500 names), richer features, or cost-aware portfolio
+construction — the natural continuation of this work.
 
 ---
 

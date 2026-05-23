@@ -866,6 +866,23 @@ The HML loading remains a real feature exposure — the model is partly betting 
 **Revisit if:** we ever need a genuinely different training universe (then add the `eligible_universe_train_fn` callable; the flag stays as the common case).
 
 
+## 2026-05-23 — Honest headline: the alpha is look-ahead; report the negative finding
+
+**Context:** The point-in-time fixes (engine v0.4.0/v0.5.0) let us re-run the Phase-15 canonical without the survivorship leak. `notebooks/persona/honest_headline_check.py` runs the identical recipe under three universe settings:
+
+| Configuration | Sharpe long-OOS | Sharpe test | Max DD |
+|---|---|---|---|
+| No PIT (old biased headline) | +1.50 | +1.01 | −7.9% |
+| Full PIT (train + trade) | −0.27 | −0.54 | −36% |
+| Train-full / trade-PIT (GKX-style) | +0.18 | −0.21 | −25% |
+
+**Decision:** Adopt the **honest negative result** as the project's headline: once survivorship/look-ahead are correctly handled, there is no statistically meaningful out-of-sample alpha. The +1.5 was almost entirely the artifact of trading future S&P 500 entrants (TSLA/ENPH/GNRC/NOW) before they joined. REPORT.md §5/§6/§7 + abstract rewritten accordingly; the deliverable is the audited, reusable infrastructure, not the alpha.
+
+**Reasoning:** Even the most lenient honest config (train on full cross-section — legitimate since only *trading* non-members was the leak — trade only members, matching GKX) gives long-OOS +0.18 / negative test, with deep drawdowns. The training-restriction explains ~⅓ of the collapse (−0.27→+0.18); the rest is the trading restriction. A reviewer-defensible "we found Sharpe 1.5" is no longer available, and reporting it would be dishonest. The negative finding is itself a strong methodological result (López de Prado 2018).
+
+**Revisit if:** Person B's pending Optuna re-tune on the PIT panel materially lifts the +0.18 train-full number (unlikely from that base), or a future broader-universe variant is built (GKX use the full CRSP cross-section, not 500 names).
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
