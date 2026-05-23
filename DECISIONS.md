@@ -844,6 +844,17 @@ The HML loading remains a real feature exposure — the model is partly betting 
 **Revisit if:** we add a second universe (e.g. Russell 1000) — the same `eligible_universe_fn` hook covers it with no engine change.
 
 
+## 2026-05-23 — Regime overlay was a ~30% silent no-op: match by month period
+
+**Context:** Reviewing Person C's integration, found that `regime.make_regime_fn` looked the overlay up by exact timestamp. The overlay CSV is keyed by calendar month-ends (2015-01-31) but the backtest rebalances on trading-day month-ends (2015-01-30 when the 31st is a weekend). Exact-date lookup therefore returned `{}` for any month whose calendar end isn't a trading day — those months silently ran at neutral params (leverage 1.0, no sector cap). Measured: only **126/179** months (70%) over 2010-2024 actually received their regime; 30% were a no-op.
+
+**Decision:** Match by **month period** (year-month) in `make_regime_fn`, so 2015-01-30 and 2015-01-31 both resolve to the January-2015 rule. The overlay CSV is unchanged (no re-run of Person C's pipeline). Verified 179/179 (100%) in-window rebalances now resolve; `notebooks/persona/regime_alignment_check.py` is the regression guard.
+
+**Reasoning:** The mismatch made every "with-overlay" backtest understate the regime's true effect (≈30% of months weren't actually being scaled), which would bias the report's regime ablation toward "the overlay does little." Person B should re-run the Phase 15 with/without comparison after this lands so the ablation reflects the overlay applied on 100% of months.
+
+**Revisit if:** the overlay is ever re-keyed to trading-day month-ends at source (then exact match would also work, but period match stays correct and is harmless).
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:

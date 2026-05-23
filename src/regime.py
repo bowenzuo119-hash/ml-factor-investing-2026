@@ -70,10 +70,22 @@ def make_regime_dict(path: str | Path) -> dict[pd.Timestamp, RegimeParams]:
 
 
 def make_regime_fn(path: str | Path):
+    """Build the date -> RegimeParams function the backtest engine consumes.
+
+    Lookup is by **month period**, not exact timestamp. The overlay CSV is
+    keyed by calendar month-ends (e.g. 2015-01-31), but the backtest
+    rebalances on trading-day month-ends (2015-01-30 when the 31st is a
+    weekend/holiday). An exact-date lookup silently missed ~30% of months
+    and ran them at neutral params (leverage 1.0, no sector cap), so the
+    regime overlay was a partial no-op. Matching on (year, month) makes
+    2015-01-30 and 2015-01-31 both resolve to the January-2015 rule.
+    """
     regime_dict = make_regime_dict(path)
+    by_period: dict[pd.Period, RegimeParams] = {
+        pd.Period(ts, freq="M"): params for ts, params in regime_dict.items()
+    }
 
     def regime_fn(ts: pd.Timestamp) -> RegimeParams:
-        ts = pd.Timestamp(ts)
-        return regime_dict.get(ts, {})
+        return by_period.get(pd.Period(pd.Timestamp(ts), freq="M"), {})
 
     return regime_fn
