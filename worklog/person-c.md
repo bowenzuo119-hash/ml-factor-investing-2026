@@ -1,6 +1,6 @@
 # Person C — Andrea Fontana
 
-Role: ML models + factor signals (@agfontana)
+Role: regime detection (GMM / HMM) + leverage overlay (@agfontana)
 
 Newest entries at the top.
 
