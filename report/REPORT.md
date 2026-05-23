@@ -106,6 +106,10 @@ walk-forward crisis-detection rate across the predefined stress episodes is
 number that should be used when interpreting the overlay's realism. We view
 that gap as expected: the regime model is useful, but not clairvoyant.
 
+A caveat is that the final 2-state HMM was selected using crisis-detection performance on a predefined set of known stress episodes. This makes the selection criterion economically interpretable, but it is not a fully label-free model-selection rule and therefore uses limited hindsight at the model-choice stage.
+
+The operational overlay is available for the 2010–2024 out-of-sample window rather than the full 2005–2024 sample, because 2005–2009 is used as the initial burn-in / training window before the first walk-forward regime prediction in January 2010.
+
 **Overlay rule.** The regime overlay does not change *which* stocks are chosen
 by the alpha model; it changes portfolio aggressiveness and breadth:
 
