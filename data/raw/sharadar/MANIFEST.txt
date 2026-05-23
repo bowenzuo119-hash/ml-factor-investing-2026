@@ -1,0 +1,11 @@
+# Sharadar bulk pull manifest -- generated 2026-05-24T00:24:36
+
+tickers              61,927 rows |  31171 tickers | 2018-06-13..2026-05-23 |      3.6 MB | tickers.parquet
+sp500                59,158 rows |   1198 tickers | 1957-03-04..2026-05-23 |      0.1 MB | sp500.parquet
+actions             662,978 rows |  31405 tickers | 1997-12-31..2026-05-26 |      5.7 MB | actions.parquet
+sf1               3,192,543 rows |  17723 tickers | 1990-06-30..2026-12-31 |    871.7 MB | sf1_all.parquet
+daily            39,731,274 rows |  17322 tickers | 1998-12-01..2026-05-22 |    754.3 MB | daily.parquet
+sep              45,965,817 rows |  21811 tickers | 1997-12-31..2026-05-22 |   1041.8 MB | sep.parquet
+sf1_ARQ             675,864 rows |  16917 tickers | 1992-12-31..2026-03-31 |    246.5 MB | sf1_AR_arq.parquet
+sf1_ART             682,548 rows |  17723 tickers | 1992-12-31..2026-03-31 |    279.3 MB | sf1_AR_art.parquet
+sf1_MRQ             713,049 rows |  16917 tickers | 1990-06-30..2026-03-31 |    256.3 MB | sf1_MR_arq.parquet

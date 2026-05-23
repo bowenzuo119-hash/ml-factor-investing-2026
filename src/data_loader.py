@@ -1661,6 +1661,251 @@ def compute_value_factors(fundamentals: pd.DataFrame) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------
+# Bulk archival pull of the full Sharadar tables (one-time, before the
+# subscription lapses). Pulls WHOLE tables via Nasdaq Data Link's bulk export
+# into local parquet under data/raw/sharadar/ -- far more quota-efficient than
+# paginating millions of rows. The raw data is gitignored (data/**); only the
+# runner script + MANIFEST.txt are committed.
+# --------------------------------------------------------------------------
+
+RAW_DIR = DATA_DIR / "raw" / "sharadar"
+
+# Robustness for the multi-GB SEP/DAILY bulk downloads: a stalled S3 transfer
+# was hanging the socket read forever (4h silent hang observed). A socket
+# default timeout converts "no bytes for N seconds" into an exception, which
+# the export step retries instead of blocking indefinitely.
+_SHARADAR_STALL_TIMEOUT_S = 180
+_SHARADAR_EXPORT_ATTEMPTS = 4
+_SHARADAR_RETRY_BACKOFF_S = 10
+
+# table key -> (Nasdaq Data Link code, output parquet filename)
+SHARADAR_BULK_TABLES: dict[str, tuple[str, str]] = {
+    "tickers": ("SHARADAR/TICKERS", "tickers.parquet"),  # tiny: universe metadata
+    "sp500":   ("SHARADAR/SP500",   "sp500.parquet"),    # small: index membership
+    "actions": ("SHARADAR/ACTIONS", "actions.parquet"),  # medium: corp actions
+    "sf1":     ("SHARADAR/SF1",     "sf1_all.parquet"),   # big: all dimensions
+    "daily":   ("SHARADAR/DAILY",   "daily.parquet"),     # ~2GB: marketcap etc.
+    "sep":     ("SHARADAR/SEP",     "sep.parquet"),        # ~3-5GB: closeadj prices
+}
+
+# After pulling full SF1, split out the dimensions the analysis needs, under
+# the file names the team's hand-off criteria reference.
+SF1_DIMENSION_SPLITS: dict[str, str] = {
+    "ARQ": "sf1_AR_arq.parquet",  # as-reported quarterly  -> B/M
+    "ART": "sf1_AR_art.parquet",  # as-reported TTM        -> E/P
+    "MRQ": "sf1_MR_arq.parquet",  # most-recent restated   -> AR-vs-MR sensitivity
+}
+
+
+def _csv_to_parquet(csv_path, out_path) -> int:
+    """Convert a (possibly multi-GB) CSV to parquet with bounded memory.
+
+    Streams the CSV in 256 MB blocks via pyarrow and appends record batches to
+    a ParquetWriter, so SEP/DAILY never need to fit in RAM. If pyarrow's
+    first-block type inference trips on a sparse column (all-null early, valued
+    later), falls back to a pandas whole-file read, which types robustly.
+    Returns the row count written.
+    """
+    import pyarrow.csv as pacsv
+    import pyarrow.parquet as pq
+
+    out_path = Path(out_path)
+    try:
+        reader = pacsv.open_csv(
+            csv_path, read_options=pacsv.ReadOptions(block_size=256 << 20)
+        )
+        writer = None
+        rows = 0
+        try:
+            for batch in reader:
+                if writer is None:
+                    writer = pq.ParquetWriter(out_path, batch.schema)
+                writer.write_batch(batch)
+                rows += batch.num_rows
+        finally:
+            if writer is not None:
+                writer.close()
+            reader.close()
+        return rows
+    except Exception as exc:  # noqa: BLE001 - robustness fallback for sparse cols
+        print(
+            f"[bulk]   streaming convert failed "
+            f"({type(exc).__name__}: {exc}); falling back to pandas whole-file read"
+        )
+        if out_path.exists():
+            out_path.unlink()
+        df = pd.read_csv(csv_path, low_memory=False)
+        df.to_parquet(out_path, index=False)
+        return len(df)
+
+
+def _sharadar_parquet_stats(path) -> dict:
+    """Cheap manifest stats for a pulled table: rows, tickers, date span, size."""
+    import pyarrow.parquet as pq
+
+    path = Path(path)
+    pf = pq.ParquetFile(path)
+    cols = pf.schema_arrow.names
+    stats: dict = {
+        "path": str(path),
+        "rows": pf.metadata.num_rows,
+        "mb": round(path.stat().st_size / 1e6, 1),
+    }
+    datecol = next(
+        (c for c in ("date", "calendardate", "datekey", "lastupdated") if c in cols),
+        None,
+    )
+    want = [c for c in ("ticker", datecol) if c]
+    if want:
+        sub = pq.read_table(path, columns=want).to_pandas()
+        if "ticker" in sub.columns:
+            stats["n_tickers"] = int(sub["ticker"].nunique())
+        if datecol and datecol in sub.columns:
+            d = pd.to_datetime(sub[datecol], errors="coerce")
+            stats["date_min"] = str(d.min().date())
+            stats["date_max"] = str(d.max().date())
+    return stats
+
+
+def _write_sharadar_manifest(dest, manifest: dict) -> None:
+    import datetime as _dt
+
+    lines = [
+        f"# Sharadar bulk pull manifest -- generated "
+        f"{_dt.datetime.now().isoformat(timespec='seconds')}",
+        "",
+    ]
+    for key, s in manifest.items():
+        lines.append(
+            f"{key:14s} {s.get('rows', 0):>12,} rows | "
+            f"{str(s.get('n_tickers', '?')):>6} tickers | "
+            f"{s.get('date_min', '?')}..{s.get('date_max', '?')} | "
+            f"{s.get('mb', 0):>8.1f} MB | {Path(s['path']).name}"
+        )
+    (Path(dest) / "MANIFEST.txt").write_text("\n".join(lines) + "\n")
+    print(f"[bulk] wrote {Path(dest) / 'MANIFEST.txt'}")
+
+
+def _split_sf1_dimensions(dest, *, force: bool, manifest: dict) -> None:
+    import pyarrow.parquet as pq
+
+    src = Path(dest) / "sf1_all.parquet"
+    for dim, fname in SF1_DIMENSION_SPLITS.items():
+        out = Path(dest) / fname
+        if out.exists() and not force:
+            print(f"[bulk] SKIP sf1 split {dim} ({fname} exists)")
+            manifest[f"sf1_{dim}"] = _sharadar_parquet_stats(out)
+            continue
+        print(f"[bulk] sf1 split: {dim} -> {fname}")
+        tbl = pq.read_table(src, filters=[("dimension", "==", dim)])
+        pq.write_table(tbl, out)
+        manifest[f"sf1_{dim}"] = _sharadar_parquet_stats(out)
+
+
+def bulk_download_all_sharadar(
+    tables: tuple[str, ...] | None = None,
+    *,
+    dest=None,
+    force: bool = False,
+    sf1_split: bool = True,
+) -> dict:
+    """One-shot bulk download of full Sharadar tables to local parquet.
+
+    Uses Nasdaq Data Link's bulk export (entire-table zip) and streams CSV ->
+    parquet with bounded memory. **Idempotent**: a table whose parquet already
+    exists is skipped unless ``force=True``, so an interrupted pull resumes
+    where it left off. Data lands under ``data/raw/sharadar/`` (gitignored).
+
+    Parameters
+    ----------
+    tables : tuple[str] or None
+        Subset of :data:`SHARADAR_BULK_TABLES` keys (e.g. ``("sep", "daily")``).
+        None pulls all. Pull small tables first to validate the pipeline.
+    dest : path or None
+        Output directory; defaults to ``data/raw/sharadar/``.
+    force : bool
+        Re-download even if the parquet already exists.
+    sf1_split : bool
+        After the full SF1 pull, also write per-dimension splits (ARQ/ART/MRQ).
+
+    Returns
+    -------
+    dict
+        ``{table: {rows, n_tickers, date_min, date_max, mb, path}}`` -- also
+        written to ``data/raw/sharadar/MANIFEST.txt``.
+    """
+    import socket
+    import time
+    import zipfile
+    import tempfile
+
+    import nasdaqdatalink  # deferred: bulk pull is the only caller
+
+    nasdaqdatalink.ApiConfig.api_key = _nasdaq_api_key()
+    socket.setdefaulttimeout(_SHARADAR_STALL_TIMEOUT_S)
+    dest = Path(dest) if dest is not None else RAW_DIR
+    dest.mkdir(parents=True, exist_ok=True)
+    keys = tuple(tables) if tables else tuple(SHARADAR_BULK_TABLES)
+
+    manifest: dict = {}
+    for key in keys:
+        if key not in SHARADAR_BULK_TABLES:
+            raise ValueError(
+                f"unknown table '{key}'; valid: {sorted(SHARADAR_BULK_TABLES)}"
+            )
+        code, fname = SHARADAR_BULK_TABLES[key]
+        out_path = dest / fname
+        if out_path.exists() and not force:
+            print(f"[bulk] SKIP {key}: {fname} exists (force=False)")
+            manifest[key] = _sharadar_parquet_stats(out_path)
+            continue
+
+        print(f"[bulk] {key}: exporting full {code} ...", flush=True)
+        t0 = time.time()
+        rows = None
+        for attempt in range(1, _SHARADAR_EXPORT_ATTEMPTS + 1):
+            with tempfile.TemporaryDirectory() as tmp:
+                zip_path = Path(tmp) / f"{key}.zip"
+                try:
+                    nasdaqdatalink.export_table(code, filename=str(zip_path))
+                    with zipfile.ZipFile(zip_path) as zf:
+                        csv_name = next(n for n in zf.namelist() if n.endswith(".csv"))
+                        zf.extract(csv_name, tmp)
+                        rows = _csv_to_parquet(Path(tmp) / csv_name, out_path)
+                    break  # success
+                except Exception as exc:  # noqa: BLE001 - timeout/corrupt-zip retry
+                    tail = "retrying" if attempt < _SHARADAR_EXPORT_ATTEMPTS else "giving up"
+                    print(
+                        f"[bulk] {key}: attempt {attempt}/{_SHARADAR_EXPORT_ATTEMPTS} "
+                        f"failed ({type(exc).__name__}: {exc}); {tail}",
+                        flush=True,
+                    )
+                    if out_path.exists():
+                        out_path.unlink()  # drop any partial parquet before retry
+                    if attempt < _SHARADAR_EXPORT_ATTEMPTS:
+                        time.sleep(_SHARADAR_RETRY_BACKOFF_S * attempt)
+        if rows is None:
+            print(f"[bulk] {key}: FAILED after {_SHARADAR_EXPORT_ATTEMPTS} attempts; skipping", flush=True)
+            continue
+        stats = _sharadar_parquet_stats(out_path)
+        elapsed = time.time() - t0
+        print(
+            f"[bulk] {key}: {stats['rows']:,} rows | "
+            f"{stats.get('n_tickers', '?')} tickers | "
+            f"{stats.get('date_min', '?')}..{stats.get('date_max', '?')} | "
+            f"{stats['mb']:.1f} MB | {elapsed:.0f}s",
+            flush=True,
+        )
+        manifest[key] = stats
+
+    if sf1_split and (dest / "sf1_all.parquet").exists():
+        _split_sf1_dimensions(dest, force=force, manifest=manifest)
+
+    _write_sharadar_manifest(dest, manifest)
+    return manifest
+
+
+# --------------------------------------------------------------------------
 # Script entry point - run the data pipeline end-to-end.
 # --------------------------------------------------------------------------
 
