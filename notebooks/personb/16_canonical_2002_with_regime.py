@@ -1,27 +1,24 @@
-"""Phase 15: Phase 14 recipe on the 2002-04 panel start.
+"""Phase 16: Phase 15 recipe + regime overlay applied.
 
-Same configuration as Phase 14 (k=5, Layer 2 + Layer 3, tuned XGBoost,
-13 features, v0.3.0 engine), but the panel starts 9 months earlier
-(2002-04-01 vs 2003-01-01). This is the earliest start with no loss of
-Sharadar fundamentals coverage (universe-level coverage stabilises at
-~73-75% by 2002-04). The first walk-forward prediction lands at
-2012-04-30 (vs 2013-01-31 for Phase 14), extending long-OOS from 12
-years to ~12.75 years.
+Same configuration as Phase 15 (k=5, Layer 2 + Layer 3, tuned XGBoost,
+13 features, 2002-04 panel, v0.3.0 engine) but the regime function
+consults Andrea's walk-forward overlay CSV
+(results/regime_overlay_rules.csv) instead of emitting a constant
+k_per_sector=5. The CSV covers 2010-01 to 2024-12 and maps each month
+to {calm, crisis} with leverage and k_per_sector knobs.
 
-Purpose: check whether the extra training history materially moves the
-headline numbers (Sharpe / FF5 alpha). If so, Phase 15 becomes the new
-canonical; if not, Phase 14 stays canonical and Phase 15 is documented
-as the sensitivity check.
+Purpose: produce the regime-overlay ablation table for the report's
+§5 Integrated Results -- compares with-overlay (this phase) vs
+no-overlay (Phase 15) net Sharpe and max drawdown.
 
 Configuration:
-* 13 features (Phase 8 fundamentals stack)
-* Tuned XGBoost hyperparameters (Phase 3 Optuna)
-* target_kind="sector_relative" (Layer 2)
-* k_per_sector=5 with sector_map=load_sector_map() (Layer 3)
-* 2002-04 -> 2024-12 panel
-* v0.3.0 engine (block-gated refit)
+* identical to Phase 15 except for ``regime_fn``
+* regime_fn = make_regime_fn("results/regime_overlay_rules.csv")
+  with month-period-aware lookup wrapper (the CSV uses calendar
+  month-end dates; rebalance dates are trading-day month-end so
+  exact-key lookup would miss most months)
 
-Output to ``results/15_canonical_2002/``.
+Output to ``results/16_canonical_2002_with_regime/``.
 """
 from __future__ import annotations
 
@@ -42,6 +39,7 @@ from src.metrics import (
     summary_stats,
 )
 from src.models import LassoModel, NNModel, XGBoostModel
+from src.regime import make_regime_dict
 
 
 # --------------------------------------------------------------------------
@@ -62,7 +60,12 @@ LONG_QUANTILE = 0.8
 SHORT_QUANTILE = 0.2
 TRANSACTION_COST_BPS = 10.0
 
-RESULTS_DIR = Path(__file__).resolve().parents[2] / "results" / "15_canonical_2002"
+RESULTS_DIR = (
+    Path(__file__).resolve().parents[2] / "results" / "16_canonical_2002_with_regime"
+)
+REGIME_CSV = (
+    Path(__file__).resolve().parents[2] / "results" / "regime_overlay_rules.csv"
+)
 # Layer 3: k longs and k shorts within EACH GICS sector.
 # k=5 is the empirical optimum from Phase 13's sensitivity sweep.
 K_PER_SECTOR = 5
@@ -175,11 +178,23 @@ def evaluate_model(
     log_every = 5 if name == "NN" else 10
     recorder = RecordingModel(model, log_every=log_every, label=name)
 
-    # Layer 3: constant-K-per-sector regime function. Every rebalance emits
-    # the same `k_per_sector`, leaving leverage and quantile defaults
-    # unset (the engine falls back to 1.0x and the static quantiles, which
-    # are ignored anyway under k_per_sector mode).
-    def regime_constant_k(date) -> RegimeParams:
+    # Phase 16: overlay-aware regime function. Andrea's CSV uses calendar
+    # month-end dates (2010-01-31); our rebalance dates are trading-day
+    # month-end (2010-01-29). We do period-based lookup so the two align
+    # even when calendar and trading-day month-ends differ. Months outside
+    # the CSV (anything before 2010-01) fall back to Phase 15's constant
+    # k=5 calm-regime defaults so the early training years are not
+    # accidentally de-levered.
+    _regime_dict = make_regime_dict(REGIME_CSV)
+    _regime_by_period = {
+        pd.Timestamp(k).to_period("M"): v for k, v in _regime_dict.items()
+    }
+
+    def regime_with_overlay(date) -> RegimeParams:
+        period = pd.Timestamp(date).to_period("M")
+        if period in _regime_by_period:
+            return _regime_by_period[period]
+        # Pre-2010 fallback = Phase-15 calm defaults
         return {"k_per_sector": K_PER_SECTOR}
 
     # Fix 2 (audit 2026-05-23): derive the sector_map from the feature panel
@@ -196,12 +211,7 @@ def evaluate_model(
     )
 
     # Fix 1 (audit 2026-05-23, engine v0.4.0): point-in-time S&P 500
-    # membership filter. Without this the engine treats the full union of
-    # every ticker that ever touched the panel as eligible at every
-    # rebalance, including names that hadn't joined the index yet (a real
-    # survivorship leak Bowen quantified at 726 non-member positions in a
-    # 2012-2019 RandomModel run). Wrapping load_sp500_membership gives us
-    # the historical roster as it stood at each rebalance date.
+    # membership filter — see Phase 15 for the rationale.
     def universe_at(date) -> set[str]:
         return set(load_sp500_membership(asof=pd.Timestamp(date)))
 
@@ -214,18 +224,17 @@ def evaluate_model(
         long_quantile=LONG_QUANTILE,
         short_quantile=SHORT_QUANTILE,
         transaction_cost_bps=TRANSACTION_COST_BPS,
-        regime_fn=regime_constant_k,
+        regime_fn=regime_with_overlay,
         sector_map=sector_map,
         eligible_universe_fn=universe_at,
     )
     # Fix 3 (audit 2026-05-23): assert the engine that produced this result
-    # is the v0.3.0+ block-gated-refit engine. If a future engine version
-    # changes semantics, we want a loud failure here, not silent number drift.
+    # is the v0.4.0+ engine (PIT-universe-capable). Phase 16 REQUIRES PIT.
     iv = res.metadata.get("interface_version", "0.0.0")
-    if not iv.startswith(("0.3.", "0.4.")):
+    if not iv.startswith("0.4."):
         raise RuntimeError(
             f"[{name}] backtest engine returned interface_version={iv!r}; "
-            f"Phase 15 requires v0.3.x or v0.4.x semantics."
+            f"Phase 16 requires v0.4.x semantics (point-in-time universe filter)."
         )
     print(
         f"[{name}] finished: {res.metadata['n_rebalances']} rebalances, "
@@ -344,7 +353,7 @@ def main() -> int:
 
     # 1. Load data --------------------------------------------------------
     print("=" * 72)
-    print("Phase 15: canonical recipe on 2002-04 -> 2024-12 panel")
+    print("Phase 16: canonical recipe + regime overlay (2002-04 -> 2024-12)")
     print("=" * 72)
     print(f"Reading returns panel: {PANEL_FILE.name}")
     returns_wide = pd.read_parquet(PANEL_FILE)
