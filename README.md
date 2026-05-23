@@ -67,6 +67,21 @@ export KMP_DUPLICATE_LIB_OK=TRUE
 
 Add it to your shell profile, or set it at the top of a notebook with `os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"` **before** importing torch/xgboost. Linux/Windows are unaffected.
 
+## Rebuilding the data
+
+All files under `data/` and the `*.parquet` caches in `results/` are gitignored — a fresh clone has no data. Rebuild every cache in one command:
+
+```bash
+python -m notebooks.persona.run_all_data
+```
+
+It pulls S&P 500 membership (GitHub), FRED macro, yfinance prices + dollar volume, and Person C's regime overlay from free public sources, and builds the CRSP cache + Sharadar fundamentals **if** their prerequisites are present:
+
+* CRSP monthly prices need the vendor file `data/raw/CRSPData_1925_2022.csv` (not downloadable; shared by the course TA).
+* Sharadar fundamentals need `NASDAQ_DATA_LINK_API_KEY` in `.env` (copy `.env.example`).
+
+Steps whose prerequisite is missing are **skipped, not fatal**. Person A's methodology figures (sanity gate, universe coverage, walk-forward scheme, splice timeline) regenerate with `python -m notebooks.persona.report_figures`.
+
 ## Reproducibility rules
 
 * Every model gets `random_state=42`. Every sampling step gets a seed. No exceptions.

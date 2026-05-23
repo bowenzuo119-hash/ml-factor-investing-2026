@@ -1,6 +1,6 @@
 # Person B — Nicolas
 
-Role: regime detection (Gaussian Mixture) + leverage overlay (@nicolascoutomota-boop)
+Role: ML models + factor signals — XGBoost / Lasso / NN, factors.py (@nicolascoutomota-boop)
 
 Newest entries at the top.
 
