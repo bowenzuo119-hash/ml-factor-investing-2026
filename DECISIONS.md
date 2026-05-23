@@ -866,6 +866,73 @@ The HML loading remains a real feature exposure — the model is partly betting 
 **Revisit if:** we ever need a genuinely different training universe (then add the `eligible_universe_train_fn` callable; the flag stays as the common case).
 
 
+## 2026-05-23 — Phase 22: honest canonical with current data — alpha vanishes after factor adjustment
+
+**Context:** With v0.4.0 (strict PIT) and v0.5.0 (train/predict split) engine fixes, plus driver-side fixes (sector-map unification, Optuna retune on PIT panel), Phase 22 is the candidate honest canonical:
+- Relaxed PIT trading (new helper `load_sp500_ever_membership` — cumulative ever-S&P members up to date t, ~1000 names vs strict PIT's ~500, no future-joiner look-ahead).
+- Retuned XGBoost from Phase 19 (60 Optuna trials, much more regularized: min_child_weight=12 vs 1, reg_lambda=5.4 vs 1, n_estimators=50 vs 200).
+- Same Layer 2 + Layer 3 + 2002-04 panel as Phase 15.
+
+**Phase 22 results (XGBoost):**
+
+| Window | Sharpe | Ann return | Max DD | FF5 alpha | FF5 alpha t-stat | Mkt-RF β |
+|---|---|---|---|---|---|---|
+| Test 2019-2024 | +0.185 | +2.80% | -29.2% | -5.57%/yr | -0.93 (n.s.) | +0.32 (t=6.7) |
+| Long-OOS 2015-2024 | +0.325 | +5.30% | -29.2% | -1.91%/yr | -0.41 (n.s.) | +0.30 (t=5.2) |
+| Full-OOS 2012-2024 | +0.313 | +4.03% | -29.2% | -0.88%/yr | -0.24 (n.s.) | +0.30 (t=5.8) |
+
+**The honest reading:** the +0.32 long-OOS Sharpe is essentially **market beta exposure, not alpha**. Mkt-RF beta is +0.30 with t-statistic >5 (highly significant); FF5 alpha is slightly NEGATIVE at all windows (not significant either way). Translation: the strategy is roughly equivalent to holding ~30% net-long S&P 500 during a bull run — it captures market drift, not cross-sectional skill.
+
+**Pre-audit comparison (XGBoost):**
+
+| Phase | Test Sh | Long-OOS Sh | Description |
+|---|---|---|---|
+| Phase 15 original | +1.011 | +1.495 | UNKNOWN-bucket bug + no PIT (survivorship-biased — wrong) |
+| Phase 15 + fix 2 only | +1.383 | +1.225 | Sector unified, no PIT (still survivorship-biased) |
+| Phase 15 full PIT | -0.295 | -0.309 | Strict PIT + fixes (collapsed) |
+| Phase 17 (train full / trade PIT) | -0.280 | -0.113 | Confirmed not training-data issue |
+| **Phase 22 (relaxed PIT + retune)** | **+0.185** | **+0.313** | Honest with current data |
+
+**Conclusion:** with the data available to us (CRSP fixed S&P-500 union + yfinance with 10-16% delisted-ticker gap), there is no genuine factor-adjusted alpha to be extracted from a S&P-500-only universe. This matches Gu-Kelly-Xiu's reported finding that ML cross-sectional alpha lives primarily in the small/mid-cap tails (which the S&P 500 excludes by construction).
+
+**Decision:** Phase 22 is the honest canonical FOR CURRENT DATA. We will document this transparently in the report's §6 limitations. The broader-universe rebuild on Sharadar (see next entry) is the path to genuine alpha if it exists.
+
+**Reasoning:** Reporting Phase 15 original's +1.5 Sharpe would be intellectually dishonest given the survivorship leak (TSLA pre-2020 etc., quantified in PIT_INVESTIGATION_REPORT.pdf). Phase 22 is the most-careful version of "what does this strategy actually deliver on S&P 500."
+
+**Revisit if:** the broader-universe rebuild (Phase 23, planned via Sharadar) produces a significant FF5 alpha — then Phase 23 becomes canonical and Phase 22 is the "S&P-500-only sensitivity check."
+
+
+## 2026-05-23 — Broader-universe rebuild via Sharadar premium subscription (Phase 23 plan)
+
+**Context:** Phase 22 established that S&P-500-only ML cross-sectional alpha is zero after factor adjustment. To get GKX-comparable Sharpe (~1.0-1.5) we need a Russell-1000-equivalent universe (~2000 names per date). Investigated subscription upgrades and discovered Bowen's existing premium SF1 subscription actually unlocks 7 sibling tables for free:
+
+| Table | Use |
+|---|---|
+| SHARADAR/SF1 | Fundamentals (already using) |
+| SHARADAR/DAILY | Daily market cap, EV, PE, PB, PS per ticker (1998+) |
+| SHARADAR/TICKERS | 17,689 tickers (5,494 active + 12,195 delisted) with permaticker for stable joins |
+| SHARADAR/SP500 | PIT S&P 500 membership back to 1957 |
+| SHARADAR/ACTIONS | Splits, dividends, M&A, delistings (for total returns) |
+| SHARADAR/EVENTS | SEC filing dates (PIT alignment, lower priority) |
+| SHARADAR/INDICATORS | Data dictionary |
+
+**Subscription expires 2026-06-22** ("Will Not Renew"). Bowen will bulk-pull all 7 tables to local parquet this weekend before the cutoff.
+
+**Universe plan:** Use TICKERS + DAILY to define "all US common stocks with mcap > $1B at date t on NYSE/NASDAQ/ARCA" — ~2000-3000 names per rebalance, no look-ahead, no survivorship bias (TICKERS includes delisted).
+
+**Returns plan:** Sharadar's SF1 has `price` (split-adjusted close on datekey, quarterly). DAILY has daily marketcap. Combine `marketcap / sharesbas` with ACTIONS dividends to derive monthly total returns from Sharadar alone, dropping yfinance from the canonical. Validation: median per-ticker monthly-return correlation vs yfinance on a 200-ticker overlap sample must be > 0.99.
+
+**Engineering split:**
+- **Bowen (data engineering, ~6-8 hrs on his more-powerful machine):** bulk pull, new loaders, broader universe helper, return reconstruction, new panel freeze, sanity gate.
+- **Person B (analysis, ~6-8 hrs):** Optuna retune on broader panel (XGBoost + Lasso + NN), Phase 23/24/25 canonical + FF5 + DSR + AR-vs-MR sensitivity, REPORT.md headline updates.
+
+**Decision:** Phase 23 = full rebuild on Sharadar broader universe is the candidate FINAL canonical. Adopted if (a) all data lands before June 22 expiry, (b) sanity gate passes on the new panel, (c) FF5 alpha is significant under the broader universe with retuned models. Otherwise Phase 22 remains canonical and the report's headline is "no significant factor-adjusted alpha on S&P 500 ML — broader universe needed but data access exhausted."
+
+**Reasoning:** This is the maximum-effort, maximum-honesty path. If alpha exists at the GKX-comparable universe scale we'll find it. If it doesn't, we report the honest negative finding instead of inflating numbers with leaks.
+
+**Revisit if:** subscription gets extended past June 22 (then we have more time for sensitivity analyses), or the bulk pull discovers a data quirk that requires methodology adjustment.
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:

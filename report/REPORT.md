@@ -140,47 +140,110 @@ reasonable sensitivity check, but it is not needed to state the main result.
 
 ## 5. Integrated Results
 
+> **⚠️ STATUS (2026-05-23):** the headline numbers below are under active
+> revision. An audit of the engine in late May uncovered a survivorship
+> leak (the engine traded any ticker in our panel without enforcing
+> point-in-time S&P 500 membership). Bowen's engine v0.4.0 + v0.5.0
+> closed the leak; the corrected canonical (Phase 22) shows the previous
+> +1.49 Sharpe was largely an artefact and the honest current-data number
+> is +0.32 long-OOS with NO significant FF5 alpha. A broader-universe
+> rebuild via Sharadar (Phase 23) is in progress to test whether real
+> alpha is recoverable. **The numbers below are placeholders; final
+> figures will land after Phase 23 completes (~1 week).** See §6 for the
+> honest current finding.
+
 The canonical configuration is **XGBoost + 13 features + 3-layer sector-neutral
-(k = 5) + regime overlay**, trained from 2002-04 (`results/15_canonical_2002/`),
-walk-forward with 10 bps/side costs.
+(k = 5) + regime overlay**, trained from 2002-04.
 
-| Window | Net Sharpe | Ann. return | Max drawdown | DSR |
+### Pre-audit numbers (Phase 15, SURVIVORSHIP-BIASED — DO NOT QUOTE)
+| Window | Net Sharpe | Ann. return | Max drawdown | DSR | Status |
+|---|---|---|---|---|---|
+| Long-OOS (2013–2024) | +1.49 | +12.3% | −7.9% | 0.992 | leak |
+| Test-only (2019–2024) | +1.01 | +9.5% | −7.9% | 0.887 | leak |
+
+### Honest current canonical (Phase 22 — PIT-correct + retuned)
+| Window | Net Sharpe | Ann. return | Max drawdown | FF5 alpha (t-stat) |
 |---|---|---|---|---|
-| Long-OOS (2013–2024) | **+1.49** | +12.3% | −7.9% | **0.992** |
-| Test-only (2019–2024) | **+1.01** | +9.5% | −7.9% | 0.887 |
+| Long-OOS (2012–2024) | **+0.31** | +4.0% | −29.2% | −0.88%/yr (t=−0.24, n.s.) |
+| Test-only (2019–2024) | **+0.18** | +2.8% | −29.2% | −5.57%/yr (t=−0.93, n.s.) |
 
-Robustness (§8 of the Alpha Model section): 2015–2024 bootstrap Sharpe 95% CI
-**[+0.82, +1.83]**, P(Sharpe ≤ 0) = 0.000; long-OOS **DSR = 0.992** after
-correcting for the trials run during development. Diebold-Mariano selects
-XGBoost over Lasso.
+The Phase 22 long-OOS Sharpe of +0.31 is essentially market beta
+(Mkt-RF β = +0.30, t=5.2). After Fama-French 5-factor adjustment **there
+is no statistically significant alpha** on the S&P-500-only universe.
+This is consistent with the academic literature that ML cross-sectional
+alpha lives primarily in the broader (small/mid-cap-inclusive) universe
+that the S&P 500 excludes by construction.
 
-*[TODO: regime overlay ablation — report with-overlay vs no-overlay net Sharpe
-and max drawdown side by side, to show the overlay earns its keep (the cleanest
-single table to justify Person C's contribution). Compare `results/14_*` or a
-no-regime run vs `results/15_canonical_2002/`.]*
-
-*[TODO: insert the headline equity curve and drawdown plot —
-`results/15_canonical_2002/` or `results/presentation_plots/`.]*
+*[Pending Phase 23 broader-universe rebuild — Sharadar bulk pull this
+weekend, retuned canonical Monday-Tuesday, final numbers Wednesday.]*
 
 ---
 
 ## 6. Limitations and honest findings
 
-- **Test-window significance is borderline.** Long-OOS DSR (0.992) clears 0.95,
-  but the stricter 6-year 2019–2024 test window sits at **0.887** — just below.
-  The long-OOS result is the significant one; the short window is suggestive.
-- **Alpha is largely factor exposure.** Fama-French alpha is not significant
-  (t ≈ 0.8); the strategy loads negatively on HML (short-value tilt) and
-  positively on the market. The edge is real but is partly compensated factor
-  risk, not pure uncorrelated skill.
-- **Free-data coverage gap.** ~10–16% of historical tickers (delisted/renamed
-  before ~2022) are unavailable in yfinance under their old symbol; their
-  history ends at the CRSP cutoff. The point-in-time universe limits the bias
-  but does not erase it.
-- **One 22-year sample.** The DSR adjustment accounts for the trials we ran, but
-  it remains a single historical path.
-- *[TODO (Person C): regime model's walk-forward crisis-detection rate is lower
-  out-of-sample than in-sample — state the honest OOS number.]*
+### The PIT-leak incident (lessons learned, fully transparent)
+
+The most important honest disclosure in this project: **the previously-reported
+long-OOS Sharpe of +1.49 was inflated by a survivorship leak in the backtest
+engine**. We claimed point-in-time correctness throughout the project (and had
+the `load_sp500_membership` function on disk), but the engine wasn't actually
+using it — it treated every ticker in our panel as eligible at every rebalance,
+filtering only by non-NaN next-period return.
+
+**Quantitative impact** (audit findings 2026-05-23, full detail in
+[PIT_INVESTIGATION_REPORT.pdf](../PIT_INVESTIGATION_REPORT.pdf)):
+- Our panel contained 125 pre-S&P-join return observations for TSLA, 104 for
+  ENPH, 133 for GNRC, 101 for NOW — all of which the engine could see and
+  trade as if they were S&P 500 members.
+- Bowen quantified: a 2012-2019 RandomModel run traded 726 non-member
+  positions without the filter; with `eligible_universe_fn=universe_at` it
+  trades 0.
+- After enforcing strict PIT membership, XGBoost long-OOS Sharpe drops from
+  +1.49 to −0.31. With relaxed PIT (cumulative ever-S&P members, no future
+  joiners), it recovers to +0.31 — but the FF5 alpha is not significant at any
+  window. The +0.31 is essentially +0.30 Mkt-RF beta exposure.
+
+**Methodology corrections shipped (Bowen + Person B, 2026-05-23):**
+- Engine v0.4.0: optional `eligible_universe_fn` filter on prediction-time
+  eligibility and training labels.
+- Engine v0.5.0: `apply_pit_to_training` flag for clean decomposition of
+  training vs trading restrictions.
+- Driver: sector_map derived from `features['sector']` (with SIC fallback)
+  instead of `load_sector_map()` alone — dissolves the synthetic UNKNOWN
+  bucket that had 10 of 110 positions per rebalance.
+- Optuna retune of XGBoost on PIT-filtered panel (~8× the previous validation R²).
+
+### Why our S&P-500-only ML strategy doesn't show alpha
+
+Once the leak is closed, the honest finding is consistent with the academic
+literature: ML cross-sectional alpha lives primarily in **small/mid-cap stocks
+not in the S&P 500**. Gu-Kelly-Xiu (2020) report Sharpe 1.5+ on a CRSP universe
+of 3000-6000 stocks per month; the S&P 500 (500 largest stocks by definition)
+is the most efficiently-priced subset of US equities and offers little
+cross-sectional dispersion for an ML model to exploit. Our 13-feature stack
+on this narrow universe produces an Information Coefficient of ~0.006 and no
+significant FF5 alpha.
+
+### Broader-universe rebuild in progress (Phase 23)
+
+To test whether ML alpha is recoverable on a broader universe, we are
+rebuilding the pipeline on Bowen's premium Sharadar subscription (SF1 +
+DAILY + TICKERS + SP500 + ACTIONS — all included free in the existing
+subscription). The new universe will be ~2000-3000 US common stocks with
+mcap > $1B per rebalance (~Russell 1000-1500 equivalent). Subscription
+expires 2026-06-22 ("Will Not Renew") so the bulk data pull is happening
+this weekend.
+
+### Other limitations
+
+- **Free-data coverage gap (pre-broader-rebuild).** ~10–16% of historical
+  tickers (delisted/renamed before ~2022) are unavailable in yfinance under
+  their old symbol; their history ends at the CRSP cutoff. The broader-universe
+  rebuild via Sharadar closes this gap.
+- **One ~12-year OOS sample.** The DSR adjustment accounts for the trials we
+  ran, but it remains a single historical path.
+- *[TODO (Person C): regime model's walk-forward crisis-detection rate is
+  lower out-of-sample than in-sample — state the honest OOS number.]*
 
 ---
 
