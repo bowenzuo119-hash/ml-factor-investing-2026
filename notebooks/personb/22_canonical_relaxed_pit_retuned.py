@@ -1,22 +1,29 @@
-"""Phase 17: train-on-full-panel / trade-on-PIT-only diagnostic.
+"""Phase 22: HONEST canonical -- retuned XGBoost + relaxed-PIT trading.
 
-Same configuration as Phase 15 except for one engine flag: uses
-v0.5.0's apply_pit_to_training=False so the model TRAINS on the full
-~941-ticker panel (no PIT restriction at training time) while the
-TRADING universe at each rebalance is still restricted to point-in-time
-S&P 500 members.
+This is the candidate honest canonical that addresses:
+  * the survivorship leak fixed by engine v0.4.0 (strict PIT)
+  * the universe narrowness of strict PIT (~500 names) by using
+    relaxed PIT instead (~1000 names by 2024 -- cumulative ever-S&P
+    members, no future-joiner look-ahead)
+  * the hyperparameter overfit by using Phase 19's retuned XGBoost
+    params (60 Optuna trials on the relaxed-PIT validation window)
 
-Diagnostic intent: separate the two effects of the PIT filter to
-explain Phase 15's catastrophic Sharpe collapse (+1.5 -> -0.3).
+Engine flags:
+  * eligible_universe_fn = load_sp500_ever_membership  (relaxed PIT)
+  * apply_pit_to_training = True (default; train + trade both on
+    relaxed-PIT universe for internal consistency)
+  * sector_map from features['sector'] (Fix 2: real GICS/SIC sectors)
+  * regime_fn: constant k=5
 
-* If Phase 17 recovers most of the alpha -> the collapse was from
-  TRAINING-data restriction (fixable by retuning or relaxing the
-  training universe).
-* If Phase 17 still shows weak alpha -> the collapse is from
-  TRADING-universe restriction (the previous +1.5 was largely
-  look-ahead bias from trading future-S&P joiners and delisted names).
+XGBoost hyperparameters (from results/19_retune_all_relaxed_pit/best_params.json):
+  n_estimators=50, max_depth=5, learning_rate=0.00886, subsample=0.948,
+  colsample_bytree=0.65, min_child_weight=12, reg_alpha=0.643,
+  reg_lambda=5.426 (much more regularized than Phase 3's tune)
 
-Output to ``results/17_train_full_trade_pit/``.
+NN and Lasso use their existing defaults for now (Phase 19's NN retune
+hung; Lasso converged to R^2=+0.0032 but exact alpha not captured).
+
+Output to ``results/22_canonical_relaxed_pit_retuned/``.
 """
 from __future__ import annotations
 
@@ -29,7 +36,7 @@ import numpy as np
 import pandas as pd
 
 from src.backtest import run_walk_forward_backtest, RegimeParams
-from src.data_loader import load_sp500_membership
+from src.data_loader import load_sp500_ever_membership
 from src.factors import build_feature_panel, load_sector_map
 from src.metrics import (
     information_coefficient,
@@ -37,6 +44,22 @@ from src.metrics import (
     summary_stats,
 )
 from src.models import LassoModel, NNModel, XGBoostModel
+
+
+# Retuned XGBoost hyperparameters from Phase 19 (Optuna on relaxed-PIT
+# validation window). Much more regularized than Phase 3's tune --
+# min_child_weight 12 (was 1), reg_lambda 5.4 (was 1), n_estimators 50
+# (was 200). Best val R^2 = +0.002699.
+RETUNED_XGB_PARAMS = {
+    "n_estimators": 50,
+    "max_depth": 5,
+    "learning_rate": 0.00886,
+    "subsample": 0.94837,
+    "colsample_bytree": 0.65052,
+    "min_child_weight": 12,
+    "reg_alpha": 0.64281,
+    "reg_lambda": 5.42577,
+}
 
 
 # --------------------------------------------------------------------------
@@ -57,7 +80,10 @@ LONG_QUANTILE = 0.8
 SHORT_QUANTILE = 0.2
 TRANSACTION_COST_BPS = 10.0
 
-RESULTS_DIR = Path(__file__).resolve().parents[2] / "results" / "17_train_full_trade_pit"
+RESULTS_DIR = (
+    Path(__file__).resolve().parents[2]
+    / "results" / "22_canonical_relaxed_pit_retuned"
+)
 # Layer 3: k longs and k shorts within EACH GICS sector.
 # k=5 is the empirical optimum from Phase 13's sensitivity sweep.
 K_PER_SECTOR = 5
@@ -190,15 +216,13 @@ def evaluate_model(
         .to_dict()
     )
 
-    # Fix 1 (audit 2026-05-23, engine v0.4.0): point-in-time S&P 500
-    # membership filter. Without this the engine treats the full union of
-    # every ticker that ever touched the panel as eligible at every
-    # rebalance, including names that hadn't joined the index yet (a real
-    # survivorship leak Bowen quantified at 726 non-member positions in a
-    # 2012-2019 RandomModel run). Wrapping load_sp500_membership gives us
-    # the historical roster as it stood at each rebalance date.
+    # Phase 22: RELAXED PIT. At each rebalance, eligible universe =
+    # all tickers that were S&P 500 members at any point UP TO that date
+    # (cumulative watchlist, no future joiners). Roughly 2x larger than
+    # strict PIT (~1000 names by 2024 vs ~500), restores former-member
+    # tradability without re-introducing look-ahead bias.
     def universe_at(date) -> set[str]:
-        return set(load_sp500_membership(asof=pd.Timestamp(date)))
+        return set(load_sp500_ever_membership(asof=pd.Timestamp(date)))
 
     res = run_walk_forward_backtest(
         returns=returns_wide,
@@ -212,21 +236,15 @@ def evaluate_model(
         regime_fn=regime_constant_k,
         sector_map=sector_map,
         eligible_universe_fn=universe_at,
-        # Phase 17: train on the full panel (no PIT filter at training time)
-        # while keeping PIT at trading time. Requires engine v0.5.0+.
-        apply_pit_to_training=False,
     )
-    # Phase 17 requires v0.5.0 (the apply_pit_to_training flag).
+    # Fix 3 (audit 2026-05-23): assert the engine that produced this result
+    # is the v0.3.0+ block-gated-refit engine. If a future engine version
+    # changes semantics, we want a loud failure here, not silent number drift.
     iv = res.metadata.get("interface_version", "0.0.0")
     if not iv.startswith("0.5."):
         raise RuntimeError(
             f"[{name}] backtest engine returned interface_version={iv!r}; "
-            f"Phase 17 requires v0.5.x (apply_pit_to_training flag)."
-        )
-    pit_train = res.metadata.get("pit_applied_to_training", None)
-    if pit_train is not False:
-        raise RuntimeError(
-            f"[{name}] expected pit_applied_to_training=False, got {pit_train!r}"
+            f"Phase 22 requires v0.5.x (apply_pit_to_training flag)."
         )
     print(
         f"[{name}] finished: {res.metadata['n_rebalances']} rebalances, "
@@ -345,7 +363,7 @@ def main() -> int:
 
     # 1. Load data --------------------------------------------------------
     print("=" * 72)
-    print("Phase 17: train on full panel, trade only PIT members (v0.5.0)")
+    print("Phase 22: HONEST canonical (relaxed PIT + retuned XGBoost)")
     print("=" * 72)
     print(f"Reading returns panel: {PANEL_FILE.name}")
     returns_wide = pd.read_parquet(PANEL_FILE)
@@ -377,7 +395,20 @@ def main() -> int:
         ("Lasso",
          lambda: LassoModel(alphas=20, cv=5, target_kind=TARGET_KIND)),
         ("XGBoost",
-         lambda: XGBoostModel(target_kind=TARGET_KIND)),
+         # Phase 22: use the relaxed-PIT-retuned hyperparameters from
+         # Phase 19's Optuna study. Much more regularised than the
+         # Phase 3 tune (min_child_weight 12 vs 1, reg_lambda 5.4 vs 1).
+         lambda: XGBoostModel(
+             target_kind=TARGET_KIND,
+             n_estimators=RETUNED_XGB_PARAMS["n_estimators"],
+             max_depth=RETUNED_XGB_PARAMS["max_depth"],
+             learning_rate=RETUNED_XGB_PARAMS["learning_rate"],
+             subsample=RETUNED_XGB_PARAMS["subsample"],
+             colsample_bytree=RETUNED_XGB_PARAMS["colsample_bytree"],
+             min_child_weight=RETUNED_XGB_PARAMS["min_child_weight"],
+             reg_alpha=RETUNED_XGB_PARAMS["reg_alpha"],
+             reg_lambda=RETUNED_XGB_PARAMS["reg_lambda"],
+         )),
         ("NN",
          lambda: NNModel(hidden_dim=32, n_layers=3, dropout=0.2,
                          max_epochs=30, patience=5,

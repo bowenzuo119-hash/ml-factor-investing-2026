@@ -1,0 +1,27 @@
+{
+  "panel": "2002-2024 RELAXED-PIT (ever-S&P-up-to-date)",
+  "objective": "oos_r2_vs_zero on 2017-2018 validation",
+  "note": "NN retune hung after Lasso; killed manually. XGBoost and Lasso completed.",
+  "by_model": {
+    "xgboost": {
+      "best_value": 0.002699,
+      "best_params": {
+        "n_estimators": 50,
+        "max_depth": 5,
+        "learning_rate": 0.00886,
+        "subsample": 0.94837,
+        "colsample_bytree": 0.65052,
+        "min_child_weight": 12,
+        "reg_alpha": 0.64281,
+        "reg_lambda": 5.42577
+      }
+    },
+    "lasso": {
+      "best_value": 0.003217,
+      "note": "best params alpha not captured in log; use sklearn LassoCV defaults"
+    },
+    "nn": {
+      "status": "skipped - retune hung at first trial"
+    }
+  }
+}
