@@ -116,7 +116,7 @@ by the alpha model; it changes portfolio aggressiveness and breadth:
 | Regime | Gross leverage | k per sector | Long/short quantile |
 |---|---|---|---|
 | Calm | 1.00× | 5 | 10% / 10% |
-| Crisis | 0.40× | 2 | 4% / 4% |
+| Crisis | 0.40× | 5 | 10% / 10% |
 
 Operationally, these parameters are written to
 `results/regime_overlay_rules.csv` and consumed by the engine through
