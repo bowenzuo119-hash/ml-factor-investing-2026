@@ -12,9 +12,23 @@ code.
 ## 1. Data and panel
 
 The model is trained on a monthly panel of S&P 500 constituents from
-**January 2003 to December 2024** (264 months × 929 unique tickers). Coverage
-of all features is complete from 2003 onward; the 2003 floor is set by Sharadar
-SF1 fundamentals coverage.
+**January 2003 to December 2024** (264 months × 929 unique tickers). The data
+pipeline that produces this panel — CRSP→yfinance splice, Sharadar SF1
+fundamentals, point-in-time S&P 500 membership — is described in detail in
+the [Data Pipeline and Backtest Engine section](DATA_AND_ENGINE_SECTION.md)
+(Person A); the headline validation is a 0.999999 monthly-return correlation
+between CRSP and yfinance on the splice overlap. The point-in-time universe
+holds at ~500 names per month across the window
+([universe_coverage.png](../results/persona_figures/universe_coverage.png));
+the 2022/2023 CRSP→yfinance transition is documented in
+[splice_timeline.png](../results/persona_figures/splice_timeline.png).
+
+The **2003 start** is a deliberate design choice, not a data limit: with a
+120-month sliding training window, a 2003 panel start gives the model its
+first prediction at 2013-01-31, extending long-OOS evaluation from the
+otherwise-default 10 years to 12. (Sharadar coverage extends back to 2001,
+CRSP to 1925, so earlier starts are technically available but would burn
+training history on a regime increasingly remote from the test window.)
 
 | Period | Months | Use |
 |---|---|---|
@@ -22,11 +36,13 @@ SF1 fundamentals coverage.
 | 2013-01 – 2024-12 | 144 | Walk-forward out-of-sample (long-OOS) |
 | 2019-01 – 2024-12 | 72 | Strict test window (the model never saw any month in 2019+ during its first training cut) |
 
-Walk-forward design: at each prediction month *t*, the model is refit on a
-sliding 120-month window ending at *t–1* and produces predictions for *t*. The
-refit is block-gated (`(i − train_window) % test_window == 0`) so the model is
-not retrained at every step — this prevents the period-over-period overfitting
-that an earlier engine bug produced.
+Walk-forward design (see [walkforward_scheme.png](../results/persona_figures/walkforward_scheme.png)):
+at each prediction month *t*, the model is refit on a sliding 120-month
+window ending at *t*−1 and produces predictions for *t*. The refit is
+block-gated (`(i − train_window) % test_window == 0`) so the model is held
+frozen across each test block — preventing the period-over-period
+overfitting that an earlier engine version produced (see DECISIONS
+2026-05-22 "engine v0.3.0").
 
 ## 2. Features
 
