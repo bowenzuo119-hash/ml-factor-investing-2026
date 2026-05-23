@@ -81,38 +81,52 @@ Sharpe; SHAP attributes most of the signal to momentum and the value factors.
 
 ## 4. Regime Overlay  *(Person C)*
 
-> *Drafted from `report/week3_regime_summary.txt` and `regime_analysis_report.txt`; Person C to review/expand.*
+**Model and feature set.** Each month is classified into a market regime using
+an unsupervised model fitted on six macro-financial features: 21-day and
+63-day realised S&P 500 volatility, the VIX level, the 10Y–2Y Treasury term
+spread, the BAA–AAA corporate credit spread, and the trailing 3-month S&P 500
+return. All inputs are lagged by one trading day to eliminate look-ahead, and
+the scaler is refit on the training window only at each walk-forward step.
 
-**Model.** Each month from 2005 onward is classified into a market regime using
-unsupervised models on six macro-financial features — 21- and 63-day realised
-volatility, the VIX, the 10Y–2Y term spread, the BAA–AAA credit spread, and the
-trailing 3-month S&P 500 return — all lagged one trading day to avoid
-look-ahead and standardised on training data only. Gaussian Mixture Models
-(K = 2, 3) and Hidden Markov Models (n = 2, 3) were compared; the **HMM with
-n = 2 states** was selected for its crisis-detection rate across seven known
-stress episodes (GFC, Euro crisis, 2015–16 China scare, Q4-2018, COVID, 2022
-inflation). The HMM's learned transition matrix makes regimes "sticky,"
-matching the empirical persistence of stress periods.
+We compared Gaussian Mixture Models (K = 2, 3) and Hidden Markov Models
+(n = 2, 3). The canonical overlay keeps the **2-state HMM** selected by the
+walk-forward crisis-detection criterion rather than imposing extra granularity
+by hand. This matters for two reasons. First, the 2-state model was the best
+empirical performer out-of-sample among the candidates we tested. Second, a
+binary overlay yields the cleanest economic interpretation for the report:
+**full risk in calm periods, materially reduced risk in crises**.
 
-**Walk-forward.** Labels are genuinely out-of-sample: a 60-month minimum
-training window (2005–2009) precedes the first prediction (Jan 2010), and the
-model + scaler are refit on prior history only at each step. Over 2010–2024 the
-OOS distribution is **81% calm / 19% crisis**.
+**Walk-forward evaluation.** Regime labels are genuinely out-of-sample. A
+60-month minimum training window (2005–2009) is used before the first
+prediction in January 2010, and the model plus scaler are refit using prior
+history only. Over the 2010–2024 OOS window, the selected 2-state HMM assigns
+approximately **81% of months to calm** and **19% to crisis**. Its honest
+walk-forward crisis-detection rate across the predefined stress episodes is
+**51.1%**, which is substantially lower than the in-sample fit and is the
+number that should be used when interpreting the overlay's realism. We view
+that gap as expected: the regime model is useful, but not clairvoyant.
 
-**Overlay.** The regime sets gross leverage and sector breadth without changing
-*which* stocks the alpha model holds:
+**Overlay rule.** The regime overlay does not change *which* stocks are chosen
+by the alpha model; it changes portfolio aggressiveness and breadth:
 
 | Regime | Gross leverage | k per sector | Long/short quantile |
 |---|---|---|---|
 | Calm | 1.00× | 5 | 10% / 10% |
 | Crisis | 0.40× | 2 | 4% / 4% |
 
-It is delivered as `results/regime_overlay_rules.csv` and consumed by the engine
-via `regime.make_regime_fn`. Expected effect: a modest Sharpe cost for a
-material drawdown improvement in crisis episodes.
+Operationally, these parameters are written to
+`results/regime_overlay_rules.csv` and consumed by the engine through
+`src.regime.make_regime_fn`. When the engine receives both `k_per_sector` and a
+sector map, it applies top-k / bottom-k selection within sector, so the
+overlay tightens both gross exposure and cross-sectional breadth in crisis
+states.
 
-*[TODO (Person C): expand model-selection detail; add the regime-shaded
-S&P 500 chart (`results/regime_walkforward_chart.png`).]*
+**Interpretation.** The 2-regime specification is the canonical one in the
+report because it is the walk-forward-selected model and because the economic
+story is cleaner than a three-state variant. A 3-regime extension remains a
+reasonable sensitivity check, but it is not needed to state the main result.
+
+![Regime-shaded S&P 500 chart](../results/regime_walkforward_chart.png)
 
 ---
 
