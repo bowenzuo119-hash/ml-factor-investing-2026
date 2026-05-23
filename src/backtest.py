@@ -153,6 +153,7 @@ def run_walk_forward_backtest(
     regime_fn: RegimeFn | None = None,
     sector_map: dict[str, str] | pd.Series | None = None,
     eligible_universe_fn: Callable[[pd.Timestamp], set[str]] | None = None,
+    apply_pit_to_training: bool = True,
     long_quantile: float = 0.9,
     short_quantile: float = 0.1,
     rebalance: str = "M",
@@ -233,6 +234,13 @@ def run_walk_forward_backtest(
         Wrap ``data_loader.load_sp500_membership`` to build it::
 
             def universe_at(date): return set(load_sp500_membership(asof=date))
+    apply_pit_to_training : bool, default True
+        Whether ``eligible_universe_fn`` also restricts the *training* labels.
+        ``True`` (default) filters both training and trading (the v0.4.0
+        behaviour). ``False`` trains on the full panel but still trades only
+        PIT members — isolating the training-data restriction from the
+        trading-universe restriction. No effect when ``eligible_universe_fn``
+        is ``None``.
     long_quantile, short_quantile : float
         Cross-sectional quantile cutoffs for the long and short legs,
         used when ``regime_fn`` is ``None`` or when the regime dict does
@@ -343,9 +351,14 @@ def run_walk_forward_backtest(
             # Point-in-time universe per training (feature) date: a stock is a
             # valid training example only if it was in the investable universe
             # on the date its feature was formed. Built once per refit.
+            # Training labels are PIT-filtered only when BOTH a universe fn
+            # is supplied AND apply_pit_to_training is True. Setting the flag
+            # False trains on the full panel while still trading only PIT
+            # members (B's "train on full, trade on PIT" diagnostic).
             eligible_at_train = (
                 {d: set(eligible_universe_fn(d)) for d in train_dates}
-                if eligible_universe_fn is not None else None
+                if (eligible_universe_fn is not None and apply_pit_to_training)
+                else None
             )
             y_train_rows = []
             for (d, asset) in X_train.index:
@@ -538,6 +551,9 @@ def run_walk_forward_backtest(
         "regime_fn_applied": regime_fn is not None,
         "sector_neutral_available": sector_map is not None,
         "pit_universe_applied": eligible_universe_fn is not None,
+        "pit_applied_to_training": (
+            eligible_universe_fn is not None and apply_pit_to_training
+        ),
         "avg_leverage": float(leverage_series.mean()),
         "leverage_range": (float(leverage_series.min()), float(leverage_series.max())),
         "random_state": random_state,
@@ -580,7 +596,12 @@ def run_walk_forward_backtest(
 #           any name in returns.columns with a non-NaN return, regardless of
 #           index membership). Backward-compatible: None reproduces 0.3.0
 #           results bit-identically.
-INTERFACE_VERSION = "0.4.0"
+#   0.5.0 - add `apply_pit_to_training` flag (default True). When False with
+#           an eligible_universe_fn supplied, training uses the full panel
+#           while trading stays PIT-restricted — isolates the training-data
+#           restriction from the trading-universe restriction. Default True
+#           reproduces 0.4.0 bit-identically.
+INTERFACE_VERSION = "0.5.0"
 
 
 # --------------------------------------------------------------------------
