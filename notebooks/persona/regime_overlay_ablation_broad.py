@@ -41,9 +41,9 @@ INCLUDE = ["mom", "rev", "mvol", "ivol", "log_mktcap", "bm", "ep", "dvol",
            "roe", "roa", "de", "asset_growth", "accruals"]  # 23g's original 13
 
 
-def is_q_bankruptcy(t: str) -> bool:
-    t = str(t).upper().strip()
-    return len(t) >= 4 and t.endswith("Q")
+def is_q_bankruptcy(t: str) -> bool:  # delegates to the centralized filter
+    from src.data_loader import is_bankruptcy_ticker
+    return is_bankruptcy_ticker(t)
 
 
 def xgb():

@@ -42,9 +42,9 @@ INCLUDE = ["mom", "rev", "mvol", "ivol", "log_mktcap", "bm", "ep", "dvol",
            "roe", "roa", "de", "asset_growth", "accruals", "chmom"]  # 24-RT's 14
 
 
-def is_q(t):
-    t = str(t).upper().strip()
-    return len(t) >= 4 and t.endswith("Q")
+def is_q(t):  # delegates to the centralized, isdelisted-gated filter
+    from src.data_loader import is_bankruptcy_ticker
+    return is_bankruptcy_ticker(t)
 
 
 def xgb():
