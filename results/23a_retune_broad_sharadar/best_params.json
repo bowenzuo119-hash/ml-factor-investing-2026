@@ -1,0 +1,47 @@
+{
+  "panel": "Sharadar broad top-2000 2002-2024 (PIT)",
+  "objective": "oos_r2_vs_zero on 2017-2018 validation",
+  "train_rows": 698560,
+  "val_rows": 120662,
+  "by_model": {
+    "xgboost": {
+      "model": "XGBoost",
+      "best_value": 0.0031436244384546175,
+      "best_params": {
+        "n_estimators": 100,
+        "max_depth": 6,
+        "learning_rate": 0.01320650006258262,
+        "subsample": 0.5525290311048957,
+        "colsample_bytree": 0.5560507879222762,
+        "min_child_weight": 23,
+        "reg_alpha": 1.694803877393816,
+        "reg_lambda": 5.275289972000918
+      },
+      "n_trials": 60,
+      "elapsed_sec": 1136.7249128818512
+    },
+    "lasso": {
+      "model": "Lasso",
+      "best_value": 0.00031242844708934125,
+      "best_params": {
+        "alpha": 0.002603727310219536,
+        "max_iter": 1000
+      },
+      "n_trials": 30,
+      "elapsed_sec": 13.575762033462524
+    },
+    "nn": {
+      "model": "NN",
+      "best_value": 0.0016819051842322796,
+      "best_params": {
+        "hidden_dim": 48,
+        "n_layers": 2,
+        "dropout": 0.07577989136374075,
+        "lr": 0.009910652358702884,
+        "weight_decay": 0.00020542574015550976
+      },
+      "n_trials": 20,
+      "elapsed_sec": 930.9540622234344
+    }
+  }
+}

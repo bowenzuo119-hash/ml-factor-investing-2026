@@ -118,42 +118,49 @@ S&P 500 chart (`results/regime_walkforward_chart.png`).]*
 
 ## 5. Integrated Results
 
-> **⚠️ STATUS (2026-05-23):** the headline numbers below are under active
-> revision. An audit of the engine in late May uncovered a survivorship
-> leak (the engine traded any ticker in our panel without enforcing
-> point-in-time S&P 500 membership). Bowen's engine v0.4.0 + v0.5.0
-> closed the leak; the corrected canonical (Phase 22) shows the previous
-> +1.49 Sharpe was largely an artefact and the honest current-data number
-> is +0.32 long-OOS with NO significant FF5 alpha. A broader-universe
-> rebuild via Sharadar (Phase 23) is in progress to test whether real
-> alpha is recoverable. **The numbers below are placeholders; final
-> figures will land after Phase 23 completes (~1 week).** See §6 for the
-> honest current finding.
+The **final honest canonical** is XGBoost on the broad US equity universe
+(~2000 names per date, top by market cap, PIT survivorship-free) with
+sector-neutral construction (k=20 per GICS sector), bankrupt-ticker filter,
+and 10 bps per-side transaction costs. See `results/23g_canonical_qfiltered_orig_tune/`
+and `results/final_canonical_plots/`.
 
-The canonical configuration is **XGBoost + 13 features + 3-layer sector-neutral
-(k = 5) + regime overlay**, trained from 2002-04.
+### Final canonical (Phase 23g)
 
-### Pre-audit numbers (Phase 15, SURVIVORSHIP-BIASED — DO NOT QUOTE)
-| Window | Net Sharpe | Ann. return | Max drawdown | DSR | Status |
+| Window | Sharpe | Ann return | Max DD | **FF5 alpha** | **t-stat** | **p-value** | Mkt-β |
+|---|---|---|---|---|---|---|---|
+| **Full-OOS 2012–2024** | **+1.05** | +34.1% | −34.3% | **+17.74%/yr** | **+5.52** | **<0.001 ✓✓** | +1.42 |
+| Long-OOS 2015–2024 | +0.95 | +33.7% | −34.3% | +18.92%/yr | +5.31 | <0.001 ✓✓ | +1.46 |
+| Test 2019–2024 | +1.02 | +43.2% | −34.3% | +22.64%/yr | +5.16 | <0.001 ✓✓ | +1.54 |
+
+**Honest decomposition of the +34%/yr long-OOS realised return:**
+- ~+19%/yr from market beta exposure (β = 1.42 × ≈13.5% Mkt-RF premium)
+- ~+5%/yr from small-cap tilt (SMB)
+- **~+18%/yr pure cross-sectional alpha** (FF5-adjusted, statistically significant)
+
+So ~55-60% of the headline return comes from market exposure; the remaining
+~40-45% is a genuine ML factor edge that survives Fama-French adjustment at
+t > 5 across every reporting window. This is the first time in the project
+we have statistically significant FF5 alpha.
+
+### Comparison to the broader project narrative
+
+| Phase | Universe | Construction | Sharpe (long-OOS) | FF5 α | Status |
 |---|---|---|---|---|---|
-| Long-OOS (2013–2024) | +1.49 | +12.3% | −7.9% | 0.992 | leak |
-| Test-only (2019–2024) | +1.01 | +9.5% | −7.9% | 0.887 | leak |
+| Phase 15 (pre-audit) | S&P 500 union (leaky) | k=5 dollar-neutral | +1.49 | n/a | **INVALID — survivorship leak** |
+| Phase 22 (honest S&P) | Strict-PIT S&P 500 | k=5 dollar-neutral | +0.31 | n.s. (t=-0.4) | Market-neutral but no alpha |
+| **Phase 23g (canonical)** | **Broad US ~2000 names** | **k=20 + Q-filter** | **+0.95** | **+18.9%/yr (t=5.3) ✓✓** | **HONEST FINAL** |
 
-### Honest current canonical (Phase 22 — PIT-correct + retuned)
-| Window | Net Sharpe | Ann. return | Max drawdown | FF5 alpha (t-stat) |
-|---|---|---|---|---|
-| Long-OOS (2012–2024) | **+0.31** | +4.0% | −29.2% | −0.88%/yr (t=−0.24, n.s.) |
-| Test-only (2019–2024) | **+0.18** | +2.8% | −29.2% | −5.57%/yr (t=−0.93, n.s.) |
+### Key plots
 
-The Phase 22 long-OOS Sharpe of +0.31 is essentially market beta
-(Mkt-RF β = +0.30, t=5.2). After Fama-French 5-factor adjustment **there
-is no statistically significant alpha** on the S&P-500-only universe.
-This is consistent with the academic literature that ML cross-sectional
-alpha lives primarily in the broader (small/mid-cap-inclusive) universe
-that the S&P 500 excludes by construction.
+- [Equity curve](../results/final_canonical_plots/equity_curve_phase23g.png) — cumulative net return per model (XGBoost, NN, Lasso)
+- [Drawdown](../results/final_canonical_plots/drawdown_phase23g.png) — drawdown trajectory
+- [FF5 decomposition](../results/final_canonical_plots/ff5_decomposition_phase23g.png) — annualised return broken into pure alpha + factor contributions
+- [Phase progression](../results/final_canonical_plots/phase_progression_phase23g.png) — Sharpe history from leaky pre-audit through honest final
 
-*[Pending Phase 23 broader-universe rebuild — Sharadar bulk pull this
-weekend, retuned canonical Monday-Tuesday, final numbers Wednesday.]*
+### Regime overlay sensitivity
+
+*[TODO: re-run regime overlay ablation on Phase 23g; previous regime work
+was done on the leaky pre-audit pipeline.]*
 
 ---
 

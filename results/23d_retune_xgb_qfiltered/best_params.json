@@ -1,0 +1,19 @@
+{
+  "panel": "Sharadar broad top-2000 2002-2024 (Q-FILTERED, PIT)",
+  "objective": "oos_r2_vs_zero on 2017-2018 validation",
+  "train_rows": 644996,
+  "val_rows": 111781,
+  "best_value": 0.004627253445892543,
+  "best_params": {
+    "n_estimators": 150,
+    "max_depth": 5,
+    "learning_rate": 0.006842192737166573,
+    "subsample": 0.6235427557656646,
+    "colsample_bytree": 0.7268645544093774,
+    "min_child_weight": 28,
+    "reg_alpha": 1.2758628302585604,
+    "reg_lambda": 4.450569000436107
+  },
+  "n_trials": 60,
+  "elapsed_sec": 834.4301357269287
+}
