@@ -215,3 +215,13 @@ data/**/*.csv
 data/**/*.feather
 data/**/*.h5
 data/**/*.pkl
+
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store
+
+# Stale results pkls from superseded phases -- the authoritative artefacts
+# live in committed results/2[2-5]_*/per_model_results.pkl. Phases 01-05
+# were the pre-broad-rebuild lineage and their pkls are not load-bearing.
+results/0[0-9]_*/per_model_results.pkl
+results/0[0-9][a-z]_*/per_model_results.pkl

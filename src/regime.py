@@ -38,14 +38,12 @@ DEFAULT_REGIME_PARAM_MAP: dict[str, RegimeParams] = {
 
 def load_regime_overlay_csv(path: str | Path) -> pd.DataFrame:
     df = pd.read_csv(path, parse_dates=["month_end"])
-    required = {
-        "month_end",
-        "regime",
-        "leverage",
-        "k_per_sector",
-        "long_quantile",
-        "short_quantile",
-    }
+    # Required: month_end + regime + leverage. Optional: k_per_sector,
+    # long_quantile, short_quantile -- the production overlay is now
+    # leverage-only (the breadth/quantile lever was tested in
+    # `regime_ablation_check.py` and rejected: it hurt drawdown without
+    # adding alpha). See DECISIONS.md 2026-05-24.
+    required = {"month_end", "regime", "leverage"}
     missing = required.difference(df.columns)
     if missing:
         raise ValueError(f"Missing columns in regime overlay csv: {sorted(missing)}")
@@ -59,12 +57,16 @@ def make_regime_dict(path: str | Path) -> dict[pd.Timestamp, RegimeParams]:
 
     for _, row in df.iterrows():
         ts = pd.Timestamp(row["month_end"])
-        regime_dict[ts] = {
-            "leverage": float(row["leverage"]),
-            "k_per_sector": int(row["k_per_sector"]),
-            "long_quantile": float(row["long_quantile"]),
-            "short_quantile": float(row["short_quantile"]),
-        }
+        params: RegimeParams = {"leverage": float(row["leverage"])}
+        # Optional breadth/quantile columns -- the leverage-only canonical
+        # does not populate them, but legacy CSVs may.
+        for opt_int in ("k_per_sector",):
+            if opt_int in df.columns and pd.notna(row.get(opt_int)):
+                params[opt_int] = int(row[opt_int])
+        for opt_float in ("long_quantile", "short_quantile"):
+            if opt_float in df.columns and pd.notna(row.get(opt_float)):
+                params[opt_float] = float(row[opt_float])
+        regime_dict[ts] = params
 
     return regime_dict
 

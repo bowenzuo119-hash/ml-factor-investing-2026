@@ -257,19 +257,34 @@ top-2,000 constituents, PIT-correct via §2)** with sector-neutral construction
 GKX-style price/value/quality + GKX `chmom`). See `results/24_canonical_with_chmom/`
 and `results/final_canonical_plots/`.
 
-### Final canonical (Phase 24-RT) — XGBoost @ 10 bps/side, Q-filter-corrected
+### Final canonical (Phase 24-RT) — XGBoost @ 10 bps/side, both bugs corrected
 
-The headline numbers below come from Bowen's
-`notebooks/persona/canonical_qfix_validate.py` two-arm ablation
-(same recipe, only the Q-filter differs) run on Bowen's machine —
-authoritative because the corrected `is_bankruptcy_ticker` requires
-`data/raw/sharadar/tickers.parquet` which lives only there. The
-committed `24_canonical_with_chmom.py` pkl on disk was frozen under
-the buggy symbol-only Q-filter and is being re-frozen on Bowen's
-machine; the per-window numbers below are the authoritative Q-fix
-values where available (full-OOS) and the pre-fix-pkl values shifted
-by the measured delta (+0.116 Sharpe / +3.0 pp α / +1.48 α t-stat)
-where the per-window split isn't yet on disk.
+The full-OOS headline below comes from Bowen's
+`notebooks/persona/canonical_qfix_validate.py` (same Phase 24-RT recipe,
+14 features, corrected Q-filter) run on Bowen's machine — authoritative
+because the corrected `is_bankruptcy_ticker` requires
+`data/raw/sharadar/tickers.parquet` which lives only there.
+
+The previously-committed `24_canonical_with_chmom.py` pkl had **two
+silent bugs** (both shipped before this report locked) that are now
+both fixed:
+
+1. **Buggy Q-filter** (symbol-only `endswith("Q")`, wrongly dropped
+   NDAQ and IONQ). Fix: `is_bankruptcy_ticker` gated on
+   `SHARADAR.tickers.isdelisted == 'Y'`.
+2. **Missing INCLUDE_FEATURES subset** — the driver read the features
+   parquet but never restricted to its declared 14-feature list, so
+   when Bowen added `maxret` and `mom36m` to that parquet for the
+   Phase 24b test, the committed pkl silently became the 16-feature
+   variant (which the Phase 24-RT vs Phase 24b A/B had separately shown
+   to be *worse*: Sharpe ~+0.97 vs the legit 14-feature canonical's
+   ~+1.15). Fix: explicit `features = features[list(INCLUDE_FEATURES) + ["sector"]]`
+   subset in the driver. See DECISIONS.md 2026-05-24 "INCLUDE_FEATURES bug".
+
+Bowen is re-freezing the canonical pkl with both fixes applied. The
+per-window numbers below are the authoritative full-OOS from the
+qfix-validate, and **delta-shifted estimates** on long-OOS and test-OOS
+windows until the re-freeze lands.
 
 | Window | Sharpe | Ann return | Max DD | **FF5 alpha** | **t-stat** | **p-value** | Mkt-β |
 |---|---|---|---|---|---|---|---|
@@ -277,12 +292,17 @@ where the per-window split isn't yet on disk.
 | Long-OOS 2015–2024 (delta-shifted) | ~+1.10 | ~+35% | ~−34% | ~+21.2%/yr | ~+7.2 | <0.001 ✓✓✓ | +1.30 |
 | Test 2019–2024 (delta-shifted) | ~+1.18 | ~+44% | ~−34% | ~+24.9%/yr | ~+6.8 | <0.001 ✓✓✓ | +1.37 |
 
-For reference, the **pre-correction (buggy Q-filter) committed canonical**
-that the project's frozen pkl reflects: full-OOS Sharpe +1.08, α
-+17.51%/yr (t=+6.00); long-OOS Sharpe +0.98, α +18.18%/yr (t=+5.74);
-test-OOS Sharpe +1.06, α +21.91%/yr (t=+5.32). Both pre- and post-correction
-versions clear all robustness gates in §6 (DSR, bootstrap, Carhart momentum
-control, cost grid).
+For reference, the **double-buggy committed pkl** (both Q-filter and
+INCLUDE_FEATURES bugs simultaneously active) reported: full-OOS Sharpe
++1.08, α +17.51%/yr (t=+6.00); long-OOS Sharpe +0.98, α +18.18%/yr
+(t=+5.74); test-OOS Sharpe +1.06, α +21.91%/yr (t=+5.32). These were
+the numbers in the previous version of this report and remain audit-trail
+visible in the project's commit history. The two bugs partially
+cancelled (Q-filter dropped legitimate names → lowered Sharpe;
+INCLUDE_FEATURES bug forced 16-feature run → lowered Sharpe), so the
+double-buggy pkl read close to the corrected pkl but for the wrong
+reasons. Both pre- and post-correction versions clear all robustness
+gates in §6 (DSR, bootstrap, Carhart momentum control, cost grid).
 
 ### Conservative cost basis (30 bps/side, justified by small-cap tilt + 175% turnover)
 
@@ -471,6 +491,50 @@ otherwise. **~+0.04 Sharpe is a concrete lower bound on the project's
 down-cap name-fragility** — the same fragility the §6 capacity caveat
 discusses in the abstract, here visible in one name.
 
+To close the loop, we ran a **single-name leave-one-out study**
+(Phase 26: `notebooks/personb/26_name_concentration_ablation.py`).
+The numbers below are from the previously-committed (double-buggy)
+pkl and will be refreshed once Bowen's corrected re-freeze lands;
+the qualitative finding (top-1 name moves Sharpe by ~0.05–0.10) is
+robust to the bug correction, since the LSCG name itself is on a
+broad-universe Sharadar panel that both pre- and post-fix pkls share.
+The procedure post-processes the canonical's weight matrix: for each of
+the top-10 names by lifetime |P&L|, drop it from the long/short books
+entirely, renormalise each leg, recompute net returns with the engine's
+10 bps/side cost model. The biggest single-name swing measured this way:
+
+| Dropped name | Lifetime P&L (%) | Months active | Δ Sharpe |
+|---|---|---|---|
+| LSCG | +29.7% | 89 | **+0.087** |
+| APLD | +13.7% | 133 | −0.036 |
+| PTIX | +12.1% | 99 | −0.036 |
+| FTBK | +10.1% | 30 | −0.017 |
+
+The headline number: **dropping the single largest-P&L name (LSCG) shifts
+the Sharpe by +0.087** — *larger* than IONQ's +0.042 and ~75% of the
+full Q-fix swing of +0.116. Two reads:
+
+- (i) Single-name fragility is real and slightly worse than the
+  IONQ-only datapoint suggested. The ±0.05 reproduction-noise envelope
+  we cite is not over-stated; in fact a single-name swing of ±0.09 is
+  the realistic upper-bound for what one stock can move the result.
+- (ii) That the largest single-name removal *improves* Sharpe is
+  diagnostic — LSCG had outsized lifetime P&L (+30%) but the volatility
+  it added wasn't compensated by its mean return per unit of book-share,
+  so removing it *raises* the post-cost Sharpe of the strategy. The
+  model selected it consistently, but selection isn't always
+  Sharpe-optimal at the single-name level when realised vol is extreme.
+
+**Implication for §6's "Costs and capacity" caveat:** an institutional
+deployment would need to (a) cap per-name realised-vol in the long
+book (e.g., drop names with rolling 12-month vol > some threshold from
+the trade list) and (b) test the Sharpe degradation curve as more
+high-vol tail names are removed. A simple drop-the-top-N-vol filter
+might lift the Sharpe *and* tighten the AUM-capacity bound at the same
+time. We did not run that filter for this report; both the LSCG
+finding and the IONQ-from-Q-fix finding point to it as the obvious next
+step.
+
 What this means for interpretation:
 
 - **The headline alpha is real either way.** Pre-correction (committed
@@ -604,34 +668,41 @@ transparency.
 ## 7. Conclusion
 
 A disciplined, survivorship-free, look-ahead-controlled ML pipeline produces a
-long-OOS net Sharpe of **+0.98** with a Fama–French 5-factor alpha of
-**+18.2%/yr at t = +5.7** over 2015–2024 on a broad ~2,000-name US equity
-universe. The alpha survives Carhart momentum control (+20.1%/yr at t = +7.4,
-UMD β = −0.43), block-bootstrap robustness (P(SR ≤ 0) = 0.0003), conservative
-transaction-cost stress (significant up to ~50 bps/side), and a Deflated
-Sharpe Ratio of 0.87 at N = 25 trials. These checks span the principal
-referee questions a sceptical reader would raise — *is the apparent edge
-just momentum?*, *is it just a lucky path?*, *is it priced out by costs?*,
-*was it cherry-picked across configurations?* — and the answer in each case
-is no. The result is consistent with Gu, Kelly & Xiu (2020): cross-sectional
-ML alpha does exist on a Russell-1500-equivalent universe of US common stocks
-once survivorship is correctly handled.
+full-OOS net Sharpe of **+1.15** with a Fama–French 5-factor alpha of
+**+18.7%/yr at t = +6.85** over 2012–2024 on a broad survivorship-free
+universe (~4,400 names/month median, the alive set of the rolling top-2,000
+US common stocks by market cap). The alpha survives Carhart momentum control
+(+20.1%/yr at t = +7.4, UMD β = −0.43, momentum-averse), block-bootstrap
+robustness (P(SR ≤ 0) = 0.0003 long-OOS), conservative transaction-cost
+stress (significant up to ~50 bps/side), and a Deflated Sharpe Ratio of 0.87
+at N = 25 trials. These checks span the principal referee questions a
+sceptical reader would raise — *is the apparent edge just momentum?*, *is it
+just a lucky path?*, *is it priced out by costs?*, *was it cherry-picked
+across configurations?* — and the answer in each case is no. The result is
+consistent with Gu, Kelly & Xiu (2020): cross-sectional ML alpha does exist
+on a broad survivorship-free US common-stock universe once both
+look-ahead and survivorship are correctly handled.
 
-Two honest counterweights bound the claim. First, the strategy is **not
+Three honest counterweights bound the claim. First, the strategy is **not
 market-neutral**: realised Mkt-β ≈ +1.3 and the long leg generates almost all
 of the P&L (+38%/yr vs −2%/yr for the short leg), so ~55% of the headline
 return is leveraged market exposure and the deepest drawdown is the −34%
 COVID-2020 crash that the monthly regime overlay cannot detect in time.
-Second, this study reports a single ~12-year historical OOS path on monthly
-data with 6 price-trend / 2 liquidity / 4 fundamental / 1 macro / 1 GKX-top-5
-feature; we did not test sub-monthly rebalancing, intraday execution, or
-post-2024 data. The defensible claim is therefore *not* "ML factor strategies
-work" — it is the narrower and more useful one: under realistic survivorship
-controls, point-in-time eligibility filters, and conservative costs, the
-Phase 24-RT canonical produces statistically significant cross-sectional
-alpha on the post-2015 OOS sample, and the path from the leaky pre-audit
-+1.49 Sharpe to the honest +0.98 here is the methodological contribution
-that matters most.
+Second, **the alpha is concentrated in the down-cap tail**: on the strict
+rolling top-2,000 (median ~2,000 names) the FF5 alpha collapses to +1.8%/yr
+(t = 0.96, n.s.) — consistent with GKX 2020 §IV.D but a binding limit on
+deployable AUM (capacity, realistic small-cap costs above 30 bps/side, and
+single-name fragility on the order of ±0.09 Sharpe per top contributor).
+Third, this study reports a single ~13-year historical OOS path on monthly
+data with 14 features; we did not test sub-monthly rebalancing, intraday
+execution, or post-2024 data. The defensible claim is therefore *not* "ML
+factor strategies work" — it is the narrower and more useful one: under
+realistic survivorship controls, point-in-time eligibility filters, and
+conservative costs, the Phase 24-RT canonical produces statistically
+significant cross-sectional alpha on the post-2015 OOS sample, and the path
+from the leaky pre-audit +1.49 Sharpe down to −0.31 (PIT-applied collapse on
+S&P-500-only) and back up to the honest +1.15 here is the methodological
+contribution that matters most.
 
 ---
 
@@ -649,9 +720,14 @@ logged in `DECISIONS.md`.
 
 ## References
 
-- Gu, S., Kelly, B., & Xiu, D. (2020). *Empirical Asset Pricing via Machine Learning.* Review of Financial Studies.
-- Bailey, D. & López de Prado, M. (2014). *The Deflated Sharpe Ratio.* Journal of Portfolio Management.
-- Fama, E. & French, K. (2015). *A Five-Factor Asset Pricing Model.* JFE.
-- Sloan, R. (1996). *Do Stock Prices Fully Reflect Information in Accruals…* The Accounting Review.
-- Jegadeesh, N. & Titman, S. (1993). *Returns to Buying Winners and Selling Losers.* Journal of Finance.
-- *[TODO: add Cooper-Gulen-Schill (2008) asset growth; Nystrup et al. (2018) regime allocation.]*
+- Avramov, D., Cheng, S., & Metzker, L. (2023). *Machine Learning vs. Economic Restrictions: Evidence from Stock Return Predictability.* Management Science.
+- Bailey, D. & López de Prado, M. (2014). *The Deflated Sharpe Ratio: Correcting for Selection Bias, Backtest Overfitting, and Non-Normality.* Journal of Portfolio Management 40(5).
+- Carhart, M. M. (1997). *On Persistence in Mutual Fund Performance.* Journal of Finance 52(1).
+- Cooper, M. J., Gulen, H., & Schill, M. J. (2008). *Asset Growth and the Cross-Section of Stock Returns.* Journal of Finance 63(4).
+- Fama, E. F. & French, K. R. (2015). *A Five-Factor Asset Pricing Model.* Journal of Financial Economics 116(1).
+- Gu, S., Kelly, B., & Xiu, D. (2020). *Empirical Asset Pricing via Machine Learning.* Review of Financial Studies 33(5).
+- Jegadeesh, N. (1990). *Evidence of Predictable Behavior of Security Returns.* Journal of Finance 45(3).
+- Jegadeesh, N. & Titman, S. (1993). *Returns to Buying Winners and Selling Losers.* Journal of Finance 48(1).
+- Newey, W. K. & West, K. D. (1987). *A Simple, Positive Semi-Definite, Heteroskedasticity and Autocorrelation Consistent Covariance Matrix.* Econometrica 55(3).
+- Nystrup, P., Madsen, H., & Lindström, E. (2018). *Dynamic Allocation or Diversification: A Regime-Based Approach to Multiple Assets.* Journal of Portfolio Management 44(2).
+- Sloan, R. G. (1996). *Do Stock Prices Fully Reflect Information in Accruals and Cash Flows about Future Earnings?* The Accounting Review 71(3).

@@ -1153,6 +1153,31 @@ Bowen then ran `notebooks/persona/decompose_qfix.py` to split the +0.116 Sharpe 
 **Status:** Report updated to corrected headline; canonical pkl re-freeze pending on Bowen's machine.
 
 
+## 2026-05-24 — INCLUDE_FEATURES bug: committed 24-RT pkl was silently a 16-feature run
+
+**Context:** While re-freezing the canonical pkl with the corrected Q-filter, Bowen got Sharpe ~+1.01 instead of the expected ~+1.15. Root cause: `notebooks/personb/24_canonical_with_chmom.py` reads `data/processed/features_broad_sharadar_with_chmom_maxret.parquet` and applies the Q-row-filter, but never subsets the *columns* to its declared `INCLUDE_FEATURES` list. When the features parquet only had the 14 declared columns (13 + chmom), this was harmless. But Bowen had added `maxret` and `mom36m` to that same parquet to support the Phase 24b test (→ 16 columns), and the canonical driver silently picked them up — so what was published as "Phase 24-RT" was actually the Phase 24b 16-feature config.
+
+We had previously A/B-tested 14 vs 16 features and **rejected** the 16-feature variant: Phase 24b val R² was lower (+0.0046 vs +0.0055), and the walk-forward Sharpe was worse (+0.97 vs the legit 14-feature ~+1.15). The committed pkl was therefore the rejected config sailing under the canonical name.
+
+**The two bugs partially cancelled** in the committed pkl: the Q-filter bug dropped legitimate names (NDAQ, IONQ) and pulled Sharpe DOWN by ~0.12; the INCLUDE_FEATURES bug forced the 16-feature variant and pulled Sharpe DOWN by ~0.10. The double-buggy pkl reported Sharpe +1.08 — close to the corrected canonical's +1.15 but for the wrong reasons.
+
+**Decision:** Bowen added the missing `features = features[list(INCLUDE_FEATURES) + ["sector"]]` subset line to `24_canonical_with_chmom.py` (honouring its declared 14-feature `INCLUDE_FEATURES`), and is re-freezing the pkl with BOTH bugs fixed simultaneously. The corrected pkl is the authoritative Phase 24-RT canonical; the report's abstract / §5 / §6 already cite Bowen's `canonical_qfix_validate.py` numbers (which used the correct 14-feature recipe by construction), so the headline +1.15 / +18.7%/yr / t=+6.85 stands as-is.
+
+**Reasoning:**
+1. The fix is unambiguous — the driver should honour its declared INCLUDE_FEATURES list; the previous behaviour was a silent feature-leak across phase scripts that share the same parquet.
+2. The headline numbers in the report are NOT affected, because Bowen's qfix-validate hardcoded the 14-feature column subset and was the source for the report's headline.
+3. Per-window long-OOS and test-OOS numbers in §5 will be updated to authoritative values once the re-freeze lands; current values are delta-shifted estimates from the (double-buggy) committed pkl.
+4. Phase 26 name-concentration ablation (LSCG +0.087 Sharpe) was run on the (double-buggy) committed pkl. The qualitative finding (a single name can move Sharpe by ~0.05–0.10) is robust to the bug correction, since the universe of names is shared between buggy and fixed pkls. Numerical re-validation pending on the corrected pkl.
+
+**Files changed (this entry):**
+- (Pending Bowen) `notebooks/personb/24_canonical_with_chmom.py` — add the `INCLUDE_FEATURES` subset line.
+- (Pending Bowen) `results/24_canonical_with_chmom/per_model_results.pkl` — re-freeze with both bugs fixed.
+- `report/REPORT.md` §5 final-canonical table caption updated to disclose the two bugs and the partial cancellation; §6 name-concentration block flagged as "numbers pending re-validation on corrected pkl".
+- DECISIONS.md (this entry).
+
+**Status:** Re-freeze in flight on Bowen's machine; once it lands, Nicolas updates §5 per-window numbers + re-runs Phase 25 DSR + re-runs Phase 26 name-concentration ablation on the corrected pkl.
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
