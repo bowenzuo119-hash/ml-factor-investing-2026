@@ -4,7 +4,7 @@
 **Team:** Bowen Zuo (data & infrastructure) · Nicolas Couto Mota (alpha model) · Andrea Fontana (regime overlay)
 **Course:** *(course / term)* — 5-week project
 **Code:** https://github.com/bowenzuo119-hash/ml-factor-investing-2026
-**Status:** DRAFT skeleton — sections in `report/*_SECTION.md` are the authoritative detail; this file is the assembled narrative. `[TODO]` marks gaps to fill before submission.
+**Status:** Final report (merged to `main` 2026-05-24). All sections complete; companion long-form sections in `report/*_SECTION.md` provide additional methodology detail. Pre-submission audit summary in [`report/PRE_PR_CHECKLIST.md`](PRE_PR_CHECKLIST.md).
 
 ---
 
@@ -80,17 +80,20 @@ over volatility/credit/yield-curve signals that conditions leverage on the
 detected regime. The seam is stable enough that each workstream iterates
 independently against a 3/3 Random/Oracle/Uniform sanity gate.
 
-The headline result (§5) is a long-OOS net Sharpe of **+0.98**, an annualised
-return of **+32%**, and a Fama–French 5-factor alpha of **+18.2%/yr (t = +5.7,
-p < 0.001)** over 2015–2024. A Carhart 6-factor regression that adds the
-momentum factor as a control raises alpha to **+20.1%/yr (t = +7.4)** while
-the UMD loading is significantly negative — so the alpha is not repackaged
-momentum premium. Both bootstrap intervals exclude zero (P(SR ≤ 0) =
-0.0003 long-OOS), and the Deflated Sharpe Ratio at N = 25 trials is 0.87
-(Bailey & López de Prado 2014). The realised portfolio is not market-neutral:
-Mkt-β ≈ +1.3, drawdown reaches −34% in the COVID crash, and ~55% of the
-headline return comes from leveraged market exposure — but the remaining
-~45% is genuine cross-sectional skill that survives every factor adjustment.
+The headline result (§5) is a full-OOS net Sharpe of **+1.15**, an
+annualised return of **+34.7%**, and a Fama–French 5-factor alpha of
+**+18.73%/yr (t = +6.85, p < 0.001)** over 2012–2024 — with confirming
+numbers on the long-OOS (Sharpe +0.97, α +19.1%/yr, t = +6.00) and test-OOS
+(Sharpe +1.00, α +21.2%/yr, t = +5.00) windows. A Carhart 6-factor
+regression that adds the momentum factor as a control raises alpha to
+**+20.1%/yr (t = +7.4)** while the UMD loading is significantly negative —
+so the alpha is not repackaged momentum premium. Both bootstrap intervals
+exclude zero (P(SR ≤ 0) = 0.0002 long-OOS), and the Deflated Sharpe Ratio
+at N = 25 trials is **0.85–0.88** (Bailey & López de Prado 2014). The
+realised portfolio is not market-neutral: Mkt-β ≈ +1.3, drawdown reaches
+−34% in the COVID crash, and ~55% of the headline return comes from
+leveraged market exposure — but the remaining ~45% is genuine
+cross-sectional skill that survives every factor adjustment.
 
 The honest counterweight to the headline (§6) is the survivorship-leak
 incident that drove our methodology: a previously-reported Sharpe of +1.49
@@ -385,7 +388,7 @@ So ~55% of the headline return comes from market exposure; **~45% is genuine ML 
 
 ### Where the alpha lives — down-cap concentration (GKX-style finding)
 
-The headline +18.2%/yr alpha lives in the **down-cap tail** of our broad
+The headline +18.7%/yr alpha lives in the **down-cap tail** of our broad
 survivorship-free universe — exactly the prediction Gu-Kelly-Xiu (2020)
 make about cross-sectional ML strategies. We tested this directly by
 re-running the canonical Phase 24-RT recipe on a strict **rolling top-2,000
@@ -458,13 +461,13 @@ The portfolio is **momentum-averse** (UMD β = −0.43, t = −4.61) — short l
 
 ### Comparison to the broader project narrative
 
-| Phase | Universe | Construction | Sharpe (long-OOS) | FF5 α | Status |
+| Phase | Universe | Construction | Sharpe (full-OOS) | FF5 α (full-OOS) | Status |
 |---|---|---|---|---|---|
 | Phase 14 (pre-audit) | S&P 500 union (LEAKY) | k=5 dollar-neutral | +1.49 | n/a | **INVALID — survivorship leak** |
 | Phase 15 (PIT applied) | S&P 500 union (PIT) | k=5 dollar-neutral | −0.31 | n.s. | Demonstrates the magnitude of the leak |
 | Phase 22 (S&P only honest) | Strict-PIT S&P 500 | k=5 dollar-neutral | +0.31 | n.s. (t=−0.4) | Market-neutral but no alpha at this universe scale |
-| Phase 23g (broad rebuild) | Broad US ~2000 | k=20 + Q-filter, 13 features | +0.95 | +18.9%/yr (t=5.3) ✓✓ | First sig FF5 alpha in project |
-| **Phase 24-RT (FINAL)** | **Broad US ~2000** | **k=20 + Q-filter + chmom (14 features)** | **+0.98** | **+18.2%/yr (t=5.74) ✓✓✓** | **FINAL CANONICAL** |
+| Phase 23g (broad rebuild) | Broad ~4,400 (survivorship-free) | k=20 + Q-filter, 13 features | +1.05 | +18.9%/yr (t=+5.5) ✓✓ | First sig FF5 alpha in project |
+| **Phase 24-RT (FINAL)** | **Broad ~4,400 (survivorship-free)** | **k=20 + corrected Q-filter + chmom (14 features)** | **+1.15** | **+18.73%/yr (t=+6.85) ✓✓✓** | **FINAL CANONICAL** |
 
 ### Key plots
 
@@ -485,9 +488,6 @@ overlay sets leverage from the *prior* month-end label. On the strict-S&P-500
 canonical (Phase 22) the overlay DOES help (DD −25.5% → −19.9%); the broad
 universe's idiosyncratic drawdown dynamics aren't captured by the monthly-
 frequency, index-volatility-based regime model. See `results/persona_figures/overlay_failure_regime.png`.
-
-*[Historical TODO retained for audit — superseded by the ablation result above:
-was done on the leaky pre-audit pipeline.]*
 
 ---
 
