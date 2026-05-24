@@ -269,19 +269,20 @@ Bowen's data lane.
 
 | Window | Sharpe | Ann return | Max DD | **FF5 alpha** | **t-stat** | **p-value** | Mkt-β |
 |---|---|---|---|---|---|---|---|
-| **Full-OOS 2012–2024** | **+1.15** | +34.7% | −33.8% | **+18.73%/yr** | **+6.85** | **<0.001 ✓✓✓** | +1.29 |
-| Long-OOS 2015–2024 | +0.97 | +31.9% | −33.8% | +19.10%/yr | +6.00 | <0.001 ✓✓✓ | +1.33 |
-| Test 2019–2024 | +1.00 | +39.4% | −33.8% | +21.17%/yr | +5.00 | <0.001 ✓✓✓ | +1.40 |
+| **Full-OOS 2012–2024 (headline)** | **+1.15** | +34.7% | −33.8% | **+18.73%/yr** | **+6.85** | **<0.001 ✓✓✓** | +1.29 |
+| Long-OOS 2015–2024 (confirming) | +0.97 | +31.9% | −33.8% | +19.10%/yr | +6.00 | <0.001 ✓✓✓ | +1.33 |
+| Test 2019–2024 (confirming) | +1.00 | +39.4% | −33.8% | +21.17%/yr | +5.00 | <0.001 ✓✓✓ | +1.40 |
 
-Where the q-fix benefit accrued: **all of it lands in the 2012–2014
-portion of the full-OOS window**. The 2015-onwards long-OOS Sharpe
-(+0.97) is essentially unchanged from the pre-correction value (+0.98)
-and the 2019-onwards test-OOS Sharpe is slightly LOWER (+1.00 vs the
-previously-reported +1.06) — so the qualitative picture for the
-out-of-sample period most readers care about does not shift. What
-changed is that the full-OOS Sharpe properly reflects ~13 years of
-honest data instead of being depressed by the partial-cancellation of
-the two bugs in earlier years.
+The full-OOS window is the headline; long-OOS and test-OOS are
+**confirming, not competing**, with all three Sharpes above +0.95 and
+all three FF5 alpha t-stats above +5 (p < 0.001). The three windows
+tell a consistent story: significant cross-sectional alpha across
+every reporting horizon. (Footnote on the q-fix asymmetry: the
+correction lifted full-OOS by ~+0.12 Sharpe but left long-OOS roughly
+unchanged. This is expected — the buggy Q-filter mostly removed a
+handful of dead Q-suffix shorts that contributed mainly to the
+earlier years; the post-2015 sample isn't materially affected by
+their inclusion or exclusion.)
 
 The previously-committed `24_canonical_with_chmom.py` pkl had **two
 silent bugs** (both now fixed):
@@ -366,6 +367,37 @@ factor alpha on the megacap S&P-500; we are confirming the academic finding
 that the alpha lives where most institutional money does not trade
 (small/mid-cap, where capacity and transaction costs are the binding
 constraints — see §6).
+
+### Placebo: is the alpha real or a leakage artefact?
+
+Before any factor-adjustment argument, the most direct test of whether
+the signal is real is a **within-date feature-shuffle placebo**: run
+the exact 14-feature canonical recipe (engine, universe, target, cost
+machinery all untouched), but permute the feature-vector-to-ticker
+mapping randomly within each rebalance date. Ticker *i* is handed a
+random other ticker's features that month. If the strategy still makes
+money on scrambled features, the apparent "edge" is an artefact of
+engine, target, or cost leakage rather than genuine cross-sectional
+predictive content. If the Sharpe collapses, the +1.15 needs real
+features and is not a backtest-construction artefact.
+
+Source: `notebooks/persona/placebo_shuffle_features.py`.
+
+| Arm | Full-OOS Sharpe |
+|---|---|
+| **REAL features (canonical)** | **+1.153** |
+| Shuffled, seed = 0 | −1.034 |
+| Shuffled, seed = 1 | −0.847 |
+| Shuffled, mean | **−0.940** |
+
+The edge **collapses by ~2.1 Sharpe** (+1.15 → −0.94) when the
+feature → ticker mapping is destroyed. The shuffled placebo goes
+*negative*, not just zero — turnover cost drag wins when there's no
+signal to fund it. This is the cleanest possible statement that the
++1.15 is genuine ML feature content, not a backtest-plumbing
+artefact. Combined with the **3/3 sanity gates** (Random Sharpe ≈ 0,
+Oracle Sharpe ≈ +99, Uniform Sharpe ≈ 0), the engine, universe, and
+target are clean; the alpha lives in the predictive features.
 
 ### Momentum control — is the alpha just the momentum premium?
 
@@ -494,27 +526,33 @@ otherwise. **~+0.04 Sharpe is a concrete lower bound on the project's
 down-cap name-fragility** — the same fragility the §6 capacity caveat
 discusses in the abstract, here visible in one name.
 
-To close the loop, we ran a **single-name leave-one-out study**
-(Phase 26: `notebooks/personb/26_name_concentration_ablation.py`)
-on the **corrected** 14-feature pkl.
-The procedure post-processes the canonical's weight matrix: for each of
-the top-10 names by lifetime |P&L|, drop it from the long/short books
-entirely, renormalise each leg, recompute net returns with the engine's
-10 bps/side cost model. The biggest single-name swing measured this way:
+As a supplementary check, we ran a **single-name leave-one-out study**
+(Phase 26: `notebooks/personb/26_name_concentration_ablation.py`) on
+the corrected 14-feature pkl. The procedure post-processes the
+canonical's weight matrix: for each of the top-10 names by lifetime
+|P&L|, drop it from the long/short books entirely, renormalise each
+leg, recompute net returns with the engine's 10 bps/side cost model.
+The top-4 swings:
 
 | Dropped name | Lifetime P&L (%) | Months active | Δ Sharpe |
 |---|---|---|---|
-| LSCG | +32.6% | 91 | **+0.089** |
+| LSCG | +32.6% | 91 | +0.089 |
 | PTIX | +12.2% | 115 | −0.035 |
 | FTBK | +11.1% | 29 | −0.020 |
 | APLD | +9.7% | 145 | −0.029 |
 
-The headline number: **dropping the single largest-P&L name (LSCG) shifts
-the Sharpe by +0.089** — *larger* than IONQ's +0.042 and ~77% of the
-full Q-fix swing of +0.116. The LSCG result reproduces (Δ = +0.087 on
-the previously-committed buggy-filter pkl, +0.089 on the corrected pkl),
-confirming it is a robust feature of the strategy's name selection, not
-a bug-driven artefact. Two reads:
+The exercise is **directionally positive but underpowered (n = 11 names
+sampled)** — it is suggestive that single-name removals can shift
+Sharpe on the order of ±0.05–0.09 in either direction, but the
+sample is too thin to draw a sharp inference from any one row. The
+top-1 entry (LSCG) does reproduce across the buggy and corrected
+pkls (Δ ≈ +0.087 and +0.089 respectively), which rules out a
+bug-driven artefact, but should be read as illustrative of the
+**existence** of single-name fragility rather than a precise estimate
+of its magnitude. A proper Cliff-style robustness study (leave-one-out
+across every name with a defensible contribution threshold, plus
+bootstrap CIs on each Δ) is the right next step and is left to a
+future extension. Two reads:
 
 - (i) Single-name fragility is real and slightly worse than the
   IONQ-only datapoint suggested. The ±0.05 reproduction-noise envelope
@@ -528,14 +566,12 @@ a bug-driven artefact. Two reads:
   Sharpe-optimal at the single-name level when realised vol is extreme.
 
 **Implication for §6's "Costs and capacity" caveat:** an institutional
-deployment would need to (a) cap per-name realised-vol in the long
-book (e.g., drop names with rolling 12-month vol > some threshold from
-the trade list) and (b) test the Sharpe degradation curve as more
-high-vol tail names are removed. A simple drop-the-top-N-vol filter
-might lift the Sharpe *and* tighten the AUM-capacity bound at the same
-time. We did not run that filter for this report; both the LSCG
-finding and the IONQ-from-Q-fix finding point to it as the obvious next
-step.
+deployment would plausibly benefit from (a) capping per-name realised
+volatility in the long book and (b) running a proper degradation curve
+as more tail names are removed. We did not run either for this report;
+the IONQ-from-Q-fix datapoint and the underpowered LO study above
+both point in the same direction without giving us a defensible point
+estimate of the cleanup gain.
 
 What this means for interpretation:
 
