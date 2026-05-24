@@ -857,7 +857,7 @@ The HML loading remains a real feature exposure — the model is partly betting 
 
 ## 2026-05-23 — Engine v0.5.0: separate training vs trading PIT filter
 
-**Context:** With the v0.4.0 point-in-time filter applied to *both* training labels and trading, the honest Phase 15 Sharpe is expected to drop from the survivorship-biased +1.49. Person B wants to attribute the drop: is it the *training-data* restriction (model learns from fewer stocks) or the *trading-universe* restriction (can only hold index members)? `eligible_universe_fn` applied to both at once, so the two couldn't be separated.
+**Context:** With the v0.4.0 point-in-time filter applied to *both* training labels and trading, the Phase 15 Sharpe collapsed from the survivorship-biased Phase 14 number (+1.49) to −0.31. (Correction: the +1.49 leaky headline lived in Phase 14 `14_official_canonical_k5`, not Phase 15; Phase 15 is the SAME panel with PIT applied — i.e. the leak-removal collapse itself.) Person B wants to attribute the drop: is it the *training-data* restriction (model learns from fewer stocks) or the *trading-universe* restriction (can only hold index members)? `eligible_universe_fn` applied to both at once, so the two couldn't be separated.
 
 **Decision:** Add `apply_pit_to_training: bool = True`. Default True = v0.4.0 behaviour (PIT on both, reproduces bit-identically). Set False with an `eligible_universe_fn` supplied → train on the full panel but trade only PIT members, isolating the trading restriction. Chose the boolean flag over a second `eligible_universe_train_fn` kwarg: B's diagnostic only needs full-vs-PIT on training, not an independent third universe, so the flag is the smaller API surface (YAGNI).
 
@@ -887,9 +887,9 @@ The HML loading remains a real feature exposure — the model is partly betting 
 
 | Phase | Test Sh | Long-OOS Sh | Description |
 |---|---|---|---|
-| Phase 15 original | +1.011 | +1.495 | UNKNOWN-bucket bug + no PIT (survivorship-biased — wrong) |
-| Phase 15 + fix 2 only | +1.383 | +1.225 | Sector unified, no PIT (still survivorship-biased) |
-| Phase 15 full PIT | -0.295 | -0.309 | Strict PIT + fixes (collapsed) |
+| Phase 14 (orig leaky) | +1.011 | +1.495 | UNKNOWN-bucket bug + no PIT (survivorship-biased — INVALID, withdrawn) |
+| Phase 14 + fix 2 only | +1.383 | +1.225 | Sector unified, no PIT (still survivorship-biased) |
+| Phase 15 (PIT applied) | -0.295 | -0.309 | Same S&P universe + strict PIT — exposes magnitude of leak |
 | Phase 17 (train full / trade PIT) | -0.280 | -0.113 | Confirmed not training-data issue |
 | **Phase 22 (relaxed PIT + retune)** | **+0.185** | **+0.313** | Honest with current data |
 

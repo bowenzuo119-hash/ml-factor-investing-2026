@@ -250,14 +250,25 @@ So ~55% of the headline return comes from market exposure; **~45% is genuine ML 
 
 ### Key plots
 
-- [Equity curve](../results/final_canonical_plots/equity_curve_phase23g.png) — cumulative net return per model (XGBoost, NN, Lasso)
-- [Drawdown](../results/final_canonical_plots/drawdown_phase23g.png) — drawdown trajectory
-- [FF5 decomposition](../results/final_canonical_plots/ff5_decomposition_phase23g.png) — annualised return broken into pure alpha + factor contributions
-- [Phase progression](../results/final_canonical_plots/phase_progression_phase23g.png) — Sharpe history from leaky pre-audit through honest final
+- [Equity curve (Phase 24-RT)](../results/final_canonical_plots/equity_curve_phase24_honest.png) — cumulative growth of $1 on log scale, with **SPY benchmark** and **β-hedged pure-alpha curve** alongside the raw XGBoost line. The decomposition is the headline visual: the raw line includes ~1.3× leveraged market exposure, the β-hedged line shows the genuine cross-sectional skill.
+- [Drawdown (Phase 24-RT)](../results/final_canonical_plots/drawdown_phase24.png) — drawdown trajectory: XGBoost vs SPY vs β-hedged
+- [FF5 decomposition (Phase 24-RT)](../results/final_canonical_plots/ff5_decomposition_phase24.png) — annualised return broken into pure alpha + factor contributions
+- [Phase progression](../results/final_canonical_plots/phase_progression_phase24.png) — Sharpe history: Phase 14 (leaky +1.49) → Phase 15 (PIT collapse −0.31) → Phase 22 (S&P honest +0.31) → Phase 23g (broad +0.95) → Phase 24-RT (final +0.98)
+- [Long-leg vs short-leg decomposition](../results/long_short_decomp/long_short_decomp_phase24.png) — three-line cumulative growth showing the long leg does ~all the work (+38%/yr) while the short leg is a near-zero-P&L hedge (−2%/yr). Confirms the "long high-conviction stocks + token short hedge" characterisation.
 
-### Regime overlay sensitivity
+### Regime overlay sensitivity (per Person A's Phase 23g ablation, applies to Phase 24-RT)
 
-*[TODO: re-run regime overlay ablation on Phase 23g; previous regime work
+The regime overlay was applied to the broad canonical and yielded a **net-zero
+benefit**: full-OOS Sharpe nudges +1.07 → +1.13, but test-OOS goes +1.00 →
++0.94 and **max DD is unchanged at −33.8%**. The deepest DD (Feb-Mar 2020
+COVID) was entered at full leverage because both Jan-end and Feb-end regime
+flags were 'calm' — the HMM correctly flagged March as crisis, but the
+overlay sets leverage from the *prior* month-end label. On the strict-S&P-500
+canonical (Phase 22) the overlay DOES help (DD −25.5% → −19.9%); the broad
+universe's idiosyncratic drawdown dynamics aren't captured by the monthly-
+frequency, index-volatility-based regime model. See `results/persona_figures/overlay_failure_regime.png`.
+
+*[Historical TODO retained for audit — superseded by the ablation result above:
 was done on the leaky pre-audit pipeline.]*
 
 ---

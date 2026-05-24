@@ -1,5 +1,24 @@
 # Alpha Model
 
+> **⚠️ HISTORICAL DOCUMENT — SUPERSEDED.** This section was drafted on
+> 2026-05-23 when **Phase 15** was the canonical (XGBoost on a 2002-2024
+> 941-ticker S&P 500 union panel with `+1.495` long-OOS Sharpe). That
+> headline was withdrawn after the internal audit identified a survivorship
+> leak in the engine. The current canonical is **Phase 24-RT** on a broad
+> Sharadar universe (top-2000 US common stocks per date, ~5,897 ticker
+> union, 14 features = 13 + GKX `chmom`) with Sharpe **+1.08 full-OOS /
+> +0.98 long-OOS / +1.06 test** and FF5 alpha **+18.18%/yr at t=+5.74**.
+>
+> **For the current alpha-model narrative see REPORT.md §3.**
+> **For the audit trail see PIT_INVESTIGATION_REPORT.pdf and DECISIONS.md
+> entries dated 2026-05-23 ("Phase 23g") and 2026-05-24 ("Phase 24-RT").**
+>
+> The historical text below is retained for the audit record only and
+> reflects the pre-audit canonical. Numbers, phase references, and claims
+> below are NOT the current canonical and should not be quoted externally.
+
+---
+
 *Person B's section of the final report. Draft 1 — 2026-05-23.*
 
 This section describes the cross-sectional machine-learning model that produces
