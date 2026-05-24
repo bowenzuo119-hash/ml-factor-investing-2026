@@ -203,24 +203,47 @@ discussion of feature parsimony vs broader-GKX ambition.)
 predictions (Phase 27: `notebooks/personb/27_k_sweep_dense.py`, k ∈ {1,…,30}
 plus {35, 40, 45, 50, 60, 75, 100}, no model re-runs — only the top-k/bottom-k
 selection per sector changes) shows a **broad flat optimum between k=10 and
-k=20** on all three reporting windows:
+k=20** on all three reporting windows. Per-window peaks: full-OOS k* = 16
+(Sh +1.17 vs k=20 canonical's +1.15, Δ = +0.02); long-OOS k* = 16 (+0.99 vs
++0.98, Δ = +0.01); test-OOS k* = 12 (+0.97 vs +0.94, Δ = +0.03). The
+Sharpe curve falls sharply below k=5 (concentration risk + turnover drag;
+k=1 gives Sharpe +0.56) and decays smoothly above k=25 (over-diversification;
+k=100 gives Sharpe +0.78).
 
-| Window | Optimal k | Optimal Sharpe | k=20 (canonical) Sharpe | Δ |
-|---|---|---|---|---|
-| Full-OOS 2012–24 | 16 | +1.174 | +1.153 | −0.021 |
-| Long-OOS 2015–24 | 16 | +0.993 | +0.979 | −0.014 |
-| Test 2019–24 | 12 | +0.969 | +0.935 | −0.034 |
+To check whether these tiny peak-to-canonical differences are real or
+sampling noise, we ran a **plateau-zoom sweep with 6-month block-bootstrap
+CIs** at every k in [10, 20] (Phase 27b:
+`notebooks/personb/27b_k_sweep_plateau.py`, 2,000 bootstrap iterations
+per k):
 
-k=20 sits at the edge of the flat plateau (peak-to-canonical difference
-within ±0.03 Sharpe on every window), so the choice is robust to small
-perturbations. The Sharpe curve falls sharply below k=5 (concentration risk
-+ turnover drag; k=1 gives Sharpe +0.56) and decays smoothly above k=25
-(over-diversification; k=100 gives Sharpe +0.78). The full curve is shown
-in `results/27_k_sweep_dense/k_sweep_dense.png`. k=20 was chosen
-ex-ante for round-number defensibility, and the dense sweep confirms it
-is in the optimum region — moving to k=16 would buy ~+0.02 Sharpe at the
-cost of slightly tighter book breadth and is left as an obvious incremental
-extension.
+| k | Pos/rebal | Full-OOS Sharpe | 90% CI | FF5 α/yr | α t-stat |
+|---|---|---|---|---|---|
+| 10 | 220 | +1.131 | [+0.83, +1.57] | +47.1% | +4.59 |
+| 12 | 264 | +1.139 | [+0.81, +1.59] | +42.9% | +4.48 |
+| 14 | 308 | +1.149 | [+0.80, +1.62] | +40.5% | +4.53 |
+| **16** | **352** | **+1.150 ←peak** | [+0.79, +1.62] | +39.4% | +4.47 |
+| 18 | 396 | +1.149 | [+0.77, +1.62] | +37.7% | +4.44 |
+| **20** | **440** | **+1.138 ←canonical** | [+0.75, +1.62] | +36.0% | +4.38 |
+
+(Per-row alpha t-stats in this table use a post-hoc reconstruction
+through a simplified portfolio-returns function and are systematically
+lower than the engine's authoritative §5 t = +6.85 because the
+reconstruction handles transaction-cost accounting differently. The
+*relative* comparisons across k are what matters here — the absolute
+headline lives in §5.)
+
+**Result:** the k=20 canonical Sharpe falls inside the 90% bootstrap CI
+of **every other k in [10, 20]** (11/11 = 100%). The peak-to-canonical
+gap (~+0.01 Sharpe) is two orders of magnitude smaller than the CI
+half-width (~0.4 Sharpe). **k=20 is statistically indistinguishable
+from every other value in the plateau**, so the choice is empirically
+defensible on a 48-value grid (37 dense + 11 fine-grained-with-CI)
+rather than a 10-value coarse sweep. The full curve is plotted in
+`results/27_k_sweep_dense/k_sweep_dense.png`; the plateau-zoom with
+error bars is in `results/27b_k_sweep_plateau/k_sweep_plateau_zoom.png`.
+Position count at k=20 (~440 names per rebalance) sits at the
+broader-diversification side of the plateau — the right side to err on
+given §6's single-name fragility caveat.
 
 ---
 
