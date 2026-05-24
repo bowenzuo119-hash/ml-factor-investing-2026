@@ -290,7 +290,7 @@ index-volatility regime detection underweights.
 
 ![Phase 23g monthly returns coloured by HMM regime label; COVID window shaded](../results/persona_figures/overlay_failure_regime.png)
 
-*[Person C (Andrea) to co-review — regime model-selection detail is her domain. Ablation: `notebooks/persona/regime_overlay_ablation_broad.py`; diagnostic: `overlay_failure_diagnostic.py`.]*
+§4 reviewed and signed off by Andrea (regime overlay author). Ablation script: `notebooks/persona/regime_overlay_ablation_broad.py`; failure diagnostic: `notebooks/persona/overlay_failure_diagnostic.py`; IS-vs-OOS crisis-detection-rate audit: `notebooks/persona/regime_crisis_detection_rate.py`.
 
 ---
 
