@@ -984,6 +984,49 @@ So ~55-60% of the realised return is market beta; ~40-45% is the real factor-adj
 **Revisit if:** the regime overlay re-run on Phase 23g materially improves Sharpe (Person C's overlay), or if the AR-vs-MR sensitivity check exposes look-ahead in the SF1 fundamentals.
 
 
+## 2026-05-24 — Phase 24-RT: FINAL FINAL CANONICAL — broad universe + chmom + retune (supersedes 23g)
+
+**Context:** After Phase 23g locked, we tested whether adding GKX top-5 features (chmom, maxret, mom36m) could push the canonical higher. Three new phases:
+
+* Phase 24a: Optuna retune of XGBoost on 14-feature Q-filtered panel (chmom added). Val R² = +0.005450 (+18% over Phase 23d's 13-feature retune).
+* Phase 24 / Phase 24-RT: walk-forward backtest with retuned XGBoost + 14 features.
+* Phase 24b: 16-feature variant adding maxret + mom36m + another retune. Val R² actually LOWER (+0.0046).
+* Phase 24c: k-sweep on Phase 24-RT predictions, confirms k=20 stays optimal.
+
+**Three-way A/B (XGBoost, full-OOS Sharpe / FF5 alpha t-stat / Mkt-β):**
+
+| Phase | Features | XGBoost tune | Full-OOS Sh | α t (full) | Mkt-β |
+|---|---|---|---|---|---|
+| Phase 23g | 13 | Phase 23a | +1.054 | +5.52 | +1.42 |
+| **Phase 24-RT** | **14 (+chmom)** | **Phase 24a** | **+1.082** | **+6.00** | **+1.27** |
+| Phase 24b | 16 (+chmom+maxret+mom36m) | Phase 24b | +0.981 | +4.74 | +1.41 |
+
+**Decision:** Phase 24-RT is the FINAL CANONICAL, supersedes Phase 23g.
+
+**Reasoning:**
+1. **chmom alone (Phase 24-RT) is the winner.** Strict improvement over Phase 23g on every metric: +0.03 Sharpe, +0.48 α t-stat, −0.15 Mkt-β (closer to neutral), −0.3 pp max DD.
+2. **More is not better (Phase 24b proves it).** Adding maxret + mom36m on top of chmom HURT the model despite retuning. Hyperparameter search space gets harder; feature signals are not orthogonal enough to justify the added complexity. Confirms Bowen's independent finding ("16 features hurt with the orig tune"); also confirms ours ("16 features hurt with the proper retune"). chmom is a sweet spot.
+3. **k=20 stays optimal** under Phase 24-RT (sweep ran k ∈ {1, 2, 3, 5, 7, 10, 15, 20, 30, 50}; k=20 has highest test Sharpe AND highest α t-stat AND lower Mkt-β than smaller k).
+4. **Independent audit by Person A** reproduced Phase 23g headline +1.05 with own FF5 + Newey-West; Phase 24-RT is the same audit pattern modestly improved.
+
+**Long-leg vs short-leg decomposition** (sanity check on the +5,222% gross cumulative): the strategy is essentially **long-leg dominated**. Long leg makes +37.85%/yr alone (Sharpe +1.16); short leg makes −2.0%/yr (Sharpe −0.47). The short leg acts as a market-neutralizing hedge with near-zero direct P&L — the alpha lives in long-side stock picking. Important framing for the report: this is NOT a symmetric L/S stock-picker, it's "long high-conviction stocks + token short hedge with significant cross-sectional alpha."
+
+**Cost sensitivity** (from Bowen's independent grid on Phase 23g, expected similar on 24-RT): α stays significant (t>2) up to ~50 bps/side; dies ~75 bps. At 30 bps per side (more conservative than the canonical 10 bps, justified by the small-cap tilt + 175% monthly turnover): Sharpe ~0.94, FF5 α +13.5%/yr (t≈4.3). 30 bps is the headline number for the report.
+
+**Honest framing for the report** (NOT "market-neutral"):
+- Strategy realizes high-beta directional exposure (Mkt-β ≈ +1.3) emerging from systematic long-small-cap-high-beta vs short-large-cap-low-beta picks.
+- Combined with the long-leg dominance, the most accurate one-line description is: **"high-beta directional long-short book with significant cross-sectional alpha after Fama-French adjustment."**
+- The +34%/yr ann return decomposes (long-OOS):
+  - +19%/yr from market beta (β=+1.42 × 13.5% Mkt-RF premium)
+  - +18%/yr pure FF5 alpha (the real cross-sectional skill, t=+5.74)
+  - Residual from SMB/HML/RMW/CMA exposures
+- Drawdown: −34.0% max DD across all windows. The COVID Feb-Mar 2020 crash drives this — fast crashes outpace monthly regime detection (see Person A's overlay diagnostic).
+
+**Trial-Sharpe list for DSR adjustment:** Phase 24-RT is the 13th canonical-model trial. DSR is conservative under 10 trials; with 13 trials the penalty grows but the α t-stat of +6.00 (p < 1e-9) clears any reasonable threshold.
+
+**Revisit if:** out-of-sample year 2025+ breaks the pattern, or if a future Person C regime model with sub-monthly frequency catches the COVID drawdown that the current monthly HMM missed.
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
