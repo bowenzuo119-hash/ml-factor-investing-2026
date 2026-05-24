@@ -386,6 +386,22 @@ The strategy realizes a **high-beta directional long-short book** with significa
 
 So ~55% of the headline return comes from market exposure; **~45% is genuine ML cross-sectional skill that survives Fama-French adjustment at t > 5 across every reporting window.**
 
+### Cumulative wealth comparison vs S&P 500 — read the β-hedged line, not the gross
+
+The gross XGBoost equity curve grows **$1 → $47 over 12.9 years (+4,600% cumulative)**. That number is mathematically consistent — it follows from $(1.347)^{12.9} = 47$ at the corrected pkl's +34.7%/yr CAGR — but it is **misleading on its own** because it is artificially inflated by (a) the strategy's +1.3 leveraged Mkt-β in a 13-year bull market and (b) compounding non-linearity. The honest comparison strips the leverage and benchmarks against the same-window passive S&P:
+
+| Strategy (Feb 2012 – Dec 2024, 12.9 years, net of 10 bps/side costs) | Cumulative | $1 grows to | CAGR |
+|---|---|---|---|
+| S&P 500 passive (Mkt-RF + RF) | +463% | $5.63 | +14.3%/yr |
+| **β-hedged pure alpha (strip the +1.3 Mkt-β)** | **+614%** | **$7.13** | **+16.5%/yr** |
+| XGBoost canonical (gross, incl. +1.3 Mkt-β) | +4,600% | $47.00 | +34.7%/yr |
+
+**Three reads:**
+
+1. **The S&P itself made +463% over this window** (Sharpe ≈ +0.99 — a strong bull-market regime). $5.6 from $1 is the passive baseline; any cumulative-wealth claim must be referenced against this.
+2. **Pure alpha is 1.26× the S&P, not 8×.** The 8.3× gross ratio comes from leverage × compounding, not from a wildly higher Sharpe (our +1.15 is only +0.16 above passive). The β-hedged $7.13 is the deployable headline; the gross $47 is the leveraged-compounded backtest result.
+3. **At realistic 30 bps/side costs** the annual return drops to ~+12%/yr, putting cumulative at ~$4.4 (+340%) — *below* the passive S&P. Capacity / market-impact effects at deployable AUM would shrink it further. This is the §6 capacity-binding-limit finding, made concrete.
+
 ### Where the alpha lives — down-cap concentration (GKX-style finding)
 
 The headline +18.7%/yr alpha lives in the **down-cap tail** of our broad

@@ -28,10 +28,10 @@
 
 ## Highlights
 
-- **Full-OOS Sharpe +1.15 / FF5 α +18.7%/yr at t=+6.85 (p<0.001)** over 2012–2024 on a broad survivorship-free US equity universe (~4,400 names/month); confirming long-OOS (Sh +0.97, α +19.1%, t=+6.00) and test-OOS (Sh +1.00, α +21.2%, t=+5.00).
+- **Full-OOS Sharpe +1.15 / FF5 α +18.7%/yr at t=+6.85 (p<0.001)** over 2012–2024 on a broad survivorship-free US equity universe (~4,400 names/month); confirming long-OOS (Sh +0.97, α +19.1%, t=+6.00) and test-OOS (Sh +1.00, α +21.2%, t=+5.00). **Honest cumulative-wealth comparison vs S&P 500 over the same window:** β-hedged pure alpha grows $1→$7.13 (+614%) vs S&P $1→$5.63 (+463%) — a 1.26× outperformance from genuine cross-sectional skill. The gross XGBoost line ($1→$47, +4,600%) is artificially inflated by the strategy's +1.3 Mkt-β in a 13-year bull market and by compounding non-linearity; we lead with the β-hedged figure as the honest deployable headline.
 - **Alpha survives every rigor check:** Carhart 6F (α rises to +20.1%/yr, UMD β=−0.43, momentum-averse), block-bootstrap (P(SR≤0)=0.0002), Deflated Sharpe Ratio (0.85–0.88 at N=25 trials), cost-grid stress (significant to ~50 bps/side), **feature-shuffle placebo** (+1.15 → −0.94 when feature→ticker mapping is permuted — rules out engine/target/cost leakage).
 - **Audit-driven methodology:** caught and corrected a *survivorship leak in our own engine* (Sharpe +1.49 → −0.31 on S&P-500-only once PIT eligibility enforced). The honest +1.15 is what remains after rebuilding on the broad survivorship-free universe.
-- **Honest down-cap finding (GKX 2020 §IV.D):** on the strict rolling top-2,000 large-cap subset, FF5 α collapses to +1.8%/yr at t=0.96 (n.s.) — alpha lives in the small/mid-cap tail where capacity is the binding constraint at deployable AUM. Regime overlay is universe-dependent (works on strict-S&P, net-zero on broad due to COVID monthly-lag).
+- **Honest down-cap finding (GKX 2020 §IV.D):** on the strict rolling top-2,000 large-cap subset, FF5 α collapses to +1.8%/yr at t=0.96 (n.s.) — alpha lives in the small/mid-cap tail where capacity is the binding constraint at deployable AUM. At realistic 30 bps/side costs the strategy returns ~+12%/yr — below passive S&P. Regime overlay is universe-dependent (works on strict-S&P, net-zero on broad due to COVID monthly-lag).
 
 ## Brief Report
 

@@ -74,9 +74,43 @@ Test-OOS 2019–24 & +1.00 & +21.17\% & +5.00 \\
 - Max DD −34% (Feb-Mar 2020 COVID)
 - Visual on next slide: equity curve with SPY benchmark + β-hedged pure-alpha line
 
-## (N) Walk-forward result — equity curve (XGBoost vs SPY vs β-hedged)
+## (N) The honest cumulative comparison vs S&P 500 — pure alpha is +614%, not +4,600%
 
-![](results/final_canonical_plots/equity_curve_phase24_honest.png){width=88%}
+\footnotesize
+
+\begin{center}
+\begin{tabular}{lccc}
+\hline
+\textbf{Strategy (Feb 2012 -- Dec 2024, net of 10 bps/side)} & \textbf{Cumulative} & \textbf{\$1 grows to} & \textbf{CAGR} \\
+\hline
+S\&P 500 passive (Mkt-RF + RF) & $+463\%$ & \$5.63 & $+14.3\%/$yr \\
+\textbf{$\beta$-hedged pure alpha (honest headline)} & $\mathbf{+614\%}$ & \textbf{\$7.13} & $\mathbf{+16.5\%/}$\textbf{yr} \\
+XGBoost canonical (gross, incl. $+1.3$ Mkt-$\beta$) & $+4{,}600\%$ & \$47.00 & $+34.7\%/$yr \\
+\hline
+\end{tabular}
+\end{center}
+
+\vspace{0.2cm}
+
+**Three honest reads (key to the whole defence):**
+
+\begin{enumerate}
+\item \textbf{S\&P itself made $+463\%$ over 2012--24} (Sharpe $+0.99$ -- strong bull market). \$5.6 is the passive baseline.
+\item \textbf{Pure alpha is $1.26\times$ S\&P, not $8\times$.} The $8.3\times$ gross ratio is \emph{leverage $\times$ compounding}, not skill -- our Sharpe $+1.15$ is only $+0.16$ above passive.
+\item \textbf{At realistic 30 bps/side:} annual return $\sim+12\%/$yr $\Rightarrow$ cumulative $\sim+340\%$ ($\$4.4$), \emph{below} S\&P. Capacity at deployable AUM shrinks it further.
+\end{enumerate}
+
+\vspace{0.2cm}
+
+\normalsize
+
+\textbf{Bottom line:} we defend the $\beta$-hedged $+614\%$ as the honest deployable headline. The gross $+4{,}600\%$ is a backtest artefact of leverage in a 13-year bull market.
+
+## (N) Equity curve — three-line decomposition (read the RED line)
+
+![](results/final_canonical_plots/equity_curve_phase24_honest.png){width=85%}
+
+\footnotesize **Read the chart bottom-to-top, NOT top-to-bottom.** The honest cross-sectional skill we should be defending is the \textcolor{red}{red $\beta$-hedged line (+614\%, $1.26\times$ S\&P)} — not the green gross line. The green line is the gross XGBoost canonical with $+1.3$ leveraged Mkt-$\beta$ in a 13-year bull market; the red line is what genuine ML alpha looks like after that exposure is stripped. \normalsize
 
 ## (N) Robustness battery — alpha survives every rigor check
 
