@@ -187,17 +187,40 @@ from +0.0031 to +0.0055 (+18%) and the walk-forward Sharpe from +1.05 to
 
 Forecasts become a **sector-neutral top-/bottom-quantile dollar-neutral book
 (k=20 per GICS sector ≈ 440 positions, ~0.45% per name)** with bankrupt-
-ticker filter applied (Q-suffix rule: drop tickers ending in 'Q' of length
-≥ 4 — Sharadar's bankruptcy convention; ~1,114 names dropped over the sample,
+ticker filter applied (corrected gate: `len(ticker) ≥ 4` and `endswith("Q")`
+AND SHARADAR `isdelisted == 'Y'`; ~1,100 names dropped over the sample,
 clustering in 2008 and 2023 per §2). XGBoost wins decisively on the Diebold-
 Mariano test, on net Sharpe, and on FF5 alpha t-stat across every reporting
 window. The two GKX features tested *beyond* `chmom` (`maxret`, `mom36m`)
 were added to the panel and tested in **Phase 24b**, but a retune on the
-16-feature panel produced a **lower** walk-forward Sharpe (+0.98 vs +1.08)
+16-feature panel produced a **lower** walk-forward Sharpe (+0.98 vs +1.15)
 — marginal-feature complexity not justified by signal gain. `maxret` and
 `mom36m` remain in the panel for the sensitivity record but are excluded
 from the canonical `INCLUDE_FEATURES`. (See §6 limitations for an honest
 discussion of feature parsimony vs broader-GKX ambition.)
+
+**Choice of k (book breadth).** A dense post-hoc k-sweep on the Phase 24-RT
+predictions (Phase 27: `notebooks/personb/27_k_sweep_dense.py`, k ∈ {1,…,30}
+plus {35, 40, 45, 50, 60, 75, 100}, no model re-runs — only the top-k/bottom-k
+selection per sector changes) shows a **broad flat optimum between k=10 and
+k=20** on all three reporting windows:
+
+| Window | Optimal k | Optimal Sharpe | k=20 (canonical) Sharpe | Δ |
+|---|---|---|---|---|
+| Full-OOS 2012–24 | 16 | +1.174 | +1.153 | −0.021 |
+| Long-OOS 2015–24 | 16 | +0.993 | +0.979 | −0.014 |
+| Test 2019–24 | 12 | +0.969 | +0.935 | −0.034 |
+
+k=20 sits at the edge of the flat plateau (peak-to-canonical difference
+within ±0.03 Sharpe on every window), so the choice is robust to small
+perturbations. The Sharpe curve falls sharply below k=5 (concentration risk
++ turnover drag; k=1 gives Sharpe +0.56) and decays smoothly above k=25
+(over-diversification; k=100 gives Sharpe +0.78). The full curve is shown
+in `results/27_k_sweep_dense/k_sweep_dense.png`. k=20 was chosen
+ex-ante for round-number defensibility, and the dense sweep confirms it
+is in the optimum region — moving to k=16 would buy ~+0.02 Sharpe at the
+cost of slightly tighter book breadth and is left as an obvious incremental
+extension.
 
 ---
 

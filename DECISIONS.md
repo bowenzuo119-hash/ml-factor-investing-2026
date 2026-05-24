@@ -1178,6 +1178,39 @@ We had previously A/B-tested 14 vs 16 features and **rejected** the 16-feature v
 **Status:** Re-freeze in flight on Bowen's machine; once it lands, Nicolas updates §5 per-window numbers + re-runs Phase 25 DSR + re-runs Phase 26 name-concentration ablation on the corrected pkl.
 
 
+## 2026-05-24 — Phase 27 dense k-sweep on corrected Phase 24-RT predictions: k=20 sits at the edge of a flat plateau (k=10..20)
+
+**Context:** Phase 24c earlier swept k ∈ {1, 2, 3, 5, 7, 10, 15, 20, 30, 50} on Phase 24-RT predictions and locked k=20. We re-ran on a much denser grid (`notebooks/personb/27_k_sweep_dense.py`, k ∈ {1..30} every-1 plus {35, 40, 45, 50, 60, 75, 100}) on the corrected 14-feature pkl to confirm k=20 is in the optimum region, not just a coarse-grid winner.
+
+Method: post-process the canonical's PREDICTIONS (not weights) — each k value gets fresh top-k/bottom-k picks per GICS sector per rebalance, dollar-neutral, with the same engine cost model (10 bps/side L1 turnover). No model re-runs; all k values share the same trained XGBoost + features + universe + bug-corrected pkl.
+
+**Per-window optimal k:**
+
+| Window | Optimal k | Optimal Sharpe | k=20 canonical Sharpe | Δ vs canonical |
+|---|---|---|---|---|
+| Full-OOS 2012–24 | 16 | +1.174 | +1.153 | −0.021 |
+| Long-OOS 2015–24 | 16 | +0.993 | +0.979 | −0.014 |
+| Test 2019–24 | 12 | +0.969 | +0.935 | −0.034 |
+
+**Sharpe curve shape:** sharp drop-off below k=5 (k=1 gives Sharpe +0.56 due to concentration + turnover drag), broad flat plateau k=10..20 (Sharpe within ±0.02 of peak everywhere on full+long-OOS), smooth decay above k=25 (k=50 gives +0.93, k=100 gives +0.78 due to over-diversification and signal wash-out). Median positions per rebalance scales linearly with k: k=10 → 220 positions, k=20 → 440, k=50 → 1,100.
+
+**Decision:** Keep k=20 as the canonical. The dense sweep confirms it is in the optimum region (peak-to-canonical difference within ±0.03 Sharpe on every window), and the case for retuning to k=16 (a tiny +0.02 Sharpe improvement at the cost of slightly tighter book breadth and slightly less defensible round-number choice) is not compelling enough to re-lock the canonical so close to the report freeze.
+
+**Reasoning:**
+1. The Sharpe curve is genuinely flat between k=10 and k=20 — within reproduction-noise of the q-filter fix (±0.12 Sharpe) and the single-name fragility (±0.09 Sharpe), the k=16 vs k=20 difference (±0.02 Sharpe) is in the noise floor.
+2. k=20 was chosen ex-ante for round-number defensibility (it has been the canonical since Phase 23b). Switching to k=16 post-hoc on a ±0.02 Sharpe basis would be a textbook example of in-sample overfitting on what is essentially noise.
+3. Test-OOS prefers k=12 (Sharpe +0.969) over k=20 (+0.935) — a +0.034 swing that is the largest in the table. But test-OOS is the shortest window (n=72) with the highest sampling variance, so reading too much into it would be optimistic.
+4. Position count at k=20 (~440) is the broader-diversification end of the plateau, which the §6 single-name-fragility caveat (LO study showing LSCG +0.089 Sharpe) suggests is the right side to err on.
+
+**Files added (this entry):**
+- `notebooks/personb/27_k_sweep_dense.py` — dense sweep script.
+- `results/27_k_sweep_dense/sweep_metrics.csv` — 37-row table.
+- `results/27_k_sweep_dense/k_sweep_dense.png` — the curve figure.
+- `report/REPORT.md` §3 — new "Choice of k (book breadth)" paragraph with the per-window table + plateau description.
+
+**Revisit if:** a future canonical at a different feature count or cost basis shifts the plateau materially; or if a capacity-aware re-run pulls k optimum higher (more diversification per rebalance lowers per-name impact).
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
