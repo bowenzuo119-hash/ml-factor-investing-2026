@@ -723,8 +723,18 @@ transparency.
   rebuild via Sharadar closes this gap.
 - **One ~12-year OOS sample.** The DSR adjustment accounts for the trials we
   ran, but it remains a single historical path.
-- *[TODO (Person C): regime model's walk-forward crisis-detection rate is
-  lower out-of-sample than in-sample — state the honest OOS number.]*
+- **Regime detection is far weaker out-of-sample than in-sample.** Fit on the
+  full sample, the 2-state HMM flags **91.7%** of known stress months as crisis
+  (macro-average over the seven episodes, GFC → 2022 inflation). Re-estimated
+  honestly walk-forward (60-month burn-in, scaler refit at each step), that
+  falls to **51.1%** — the very number used to select the model. The loss is
+  concentrated in the short, fast wobbles: walk-forward, the HMM misses Euro I
+  (0/4 months) and Q4-2018 (0/3) entirely, while still catching the longer
+  episodes (China/Oil 100%, 2022 inflation 90%, COVID 67%); month-weighted
+  (pooled) OOS recall is 64.5% (20/31 stress months). This is the same
+  monthly-frequency timing limit §4 documents for the COVID crash, now
+  quantified — the overlay reacts a rebalance late to brief shocks, which is
+  also why it adds no drawdown protection on the broad book.
 
 ---
 
