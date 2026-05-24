@@ -39,18 +39,28 @@ from src.metrics import (
 from src.models import LassoModel, NNModel, XGBoostModel
 
 
-# Phase 23g: SAME as Phase 23e but uses Phase 23a's ORIGINAL XGBoost tune
-# (not the Q-filter-retuned Phase 23d tune). Clean A/B against Phase 23e
-# to tell whether the Q-filter retune actually helps FF5 alpha + market
-# beta, or whether the original tune was good enough.
+# Phase 24: 14 features (chmom added). XGBoost params from Phase 24a's
+# retune on the 14-feature Q-filtered panel (val R^2 = +0.0055, +18% over
+# Phase 23d's 13-feature tune). Lasso/NN params still from Phase 23a since
+# they weren't retuned (less likely to benefit from chmom anyway).
 import json as _json
-_PARAMS_FILE = (
+_XGB_PARAMS_FILE = (
+    Path(__file__).resolve().parents[2]
+    / "results" / "24a_retune_xgb_with_chmom" / "best_params.json"
+)
+_OTHER_PARAMS_FILE = (
     Path(__file__).resolve().parents[2]
     / "results" / "23a_retune_broad_sharadar" / "best_params.json"
 )
-with open(_PARAMS_FILE) as _f:
+if _XGB_PARAMS_FILE.exists():
+    with open(_XGB_PARAMS_FILE) as _f:
+        RETUNED_XGB_PARAMS = _json.load(_f)["best_params"]
+else:
+    # Fallback: Phase 23a's tune (13-feature panel)
+    with open(_OTHER_PARAMS_FILE) as _f:
+        RETUNED_XGB_PARAMS = _json.load(_f)["by_model"]["xgboost"]["best_params"]
+with open(_OTHER_PARAMS_FILE) as _f:
     _bp = _json.load(_f)["by_model"]
-RETUNED_XGB_PARAMS = _bp["xgboost"]["best_params"]
 RETUNED_LASSO_PARAMS = _bp["lasso"]["best_params"]
 RETUNED_NN_PARAMS = _bp["nn"]["best_params"]
 
