@@ -398,6 +398,13 @@ def main() -> int:
     features = pd.read_parquet(FEATURES_FILE)
     print(f"  features shape (raw): {features.shape}")
 
+    # Restrict to the declared INCLUDE_FEATURES (+ sector). The panel file now
+    # also carries maxret + mom36m (added later for the 16-feature 24b test);
+    # WITHOUT this subset the canonical would silently train on all 16 features
+    # -- which the 24b ablation showed HURTS (Sharpe ~1.0 vs 14-feat ~1.15).
+    features = features[list(INCLUDE_FEATURES) + ["sector"]]
+    print(f"  features shape (INCLUDE_FEATURES only): {features.shape}")
+
     # Q-FILTER: drop bankrupt-ticker rows from features AND returns BEFORE
     # passing to the engine. Now the model is trained on, predicts on, and
     # trades only legitimately-tradable names.
