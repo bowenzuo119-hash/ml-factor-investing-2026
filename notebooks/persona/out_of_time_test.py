@@ -36,9 +36,9 @@ INCLUDE = ["mom", "rev", "mvol", "ivol", "log_mktcap", "bm", "ep", "dvol",
 WF_TEST_SHARPE = 0.996  # 23g walk-forward test-only (from the ablation no-overlay arm)
 
 
-def is_q(t):
-    t = str(t).upper().strip()
-    return len(t) >= 4 and t.endswith("Q")
+def is_q(t):  # delegates to the centralized, isdelisted-gated filter
+    from src.data_loader import is_bankruptcy_ticker
+    return is_bankruptcy_ticker(t)
 
 
 def xgb():

@@ -31,11 +31,13 @@ C_LEAK, C_HONEST, C_GREY, C_AMBER, C_PURPLE = "#ef4444", "#2563eb", "#9ca3af", "
 # phase dir, short label, colour
 PHASES = [
     ("14_official_canonical_k5", "P14\nleaky S&P", C_LEAK),
-    ("15_canonical_2002", "P15\nS&P + PIT", C_GREY),
+    ("15_canonical_2002", "P15\nS&P+PIT", C_GREY),
     ("22_canonical_relaxed_pit_retuned", "P22\nretuned PIT", C_AMBER),
-    ("23g_canonical_qfiltered_orig_tune", "P23g\nbroad ★", C_HONEST),
-    ("24b_canonical_all_gkx", "P24b\n+GKX", C_PURPLE),
+    ("23g_canonical_qfiltered_orig_tune", "P23g\nbroad 13f", "#93c5fd"),
+    ("24_canonical_with_chmom", "P24-RT\nbroad ★", C_HONEST),
+    ("24b_canonical_all_gkx", "P24b\n+GKX 16f", C_PURPLE),
 ]
+CANON_DIR = "24_canonical_with_chmom"   # Phase 24-RT, the final canonical
 
 
 def _sharpe(pkl):
@@ -51,10 +53,10 @@ def main() -> int:
             bars.append((lab, _sharpe(p), c))
     leaky = pickle.load(open(RES / "14_official_canonical_k5" / "per_model_results.pkl", "rb"))["XGBoost"].portfolio_returns.dropna()
     collapse = pickle.load(open(RES / "15_canonical_2002" / "per_model_results.pkl", "rb"))["XGBoost"].portfolio_returns.dropna()
-    honest = pickle.load(open(RES / "23g_canonical_qfiltered_orig_tune" / "per_model_results.pkl", "rb"))["XGBoost"].portfolio_returns.dropna()
+    honest = pickle.load(open(RES / CANON_DIR / "per_model_results.pkl", "rb"))["XGBoost"].portfolio_returns.dropna()
 
     fig = plt.figure(figsize=(15, 9))
-    gs = fig.add_gridspec(3, 2, height_ratios=[0.7, 2.0, 1.1], hspace=0.55, wspace=0.22)
+    gs = fig.add_gridspec(3, 2, height_ratios=[0.7, 1.9, 1.5], hspace=0.55, wspace=0.22)
     fig.suptitle("Project arc — 5 weeks, 24 phases, 1 honest canonical",
                  fontsize=16, fontweight="bold", y=0.98)
 
@@ -65,7 +67,7 @@ def main() -> int:
         ("PIT audit\nleak found", "#111827"),
         ("S&P collapses\n−0.31", C_GREY),
         ("Broad Sharadar\nrebuild", C_AMBER),
-        ("Honest canonical\n+1.07 (β-adj α t=5.6)", C_HONEST),
+        ("Honest canonical\n+1.08 (β-adj α t=5.7)", C_HONEST),
     ]
     n = len(steps)
     for i, (txt, c) in enumerate(steps):
@@ -107,12 +109,14 @@ def main() -> int:
     axn.text(0.0, 1.18, "Final canonical — headline numbers", transform=axn.transAxes,
              fontsize=11, fontweight="bold", va="bottom")
     rows = [
-        ["Canonical", "XGBoost · broad top-2000 PIT · 13 features · k=20/sector · 10 bps/side"],
-        ["Net Sharpe", "+1.07 full-OOS (2012–24) · +1.00 test (2019–24)"],
-        ["FF5 alpha", "+17.7%/yr, t = +5.58 (Newey-West) — survives SMB control"],
-        ["At 30 bps/side", "Sharpe 0.94 · FF5 alpha +13.5%/yr, t = 4.28 (robust to ~50 bps)"],
-        ["Out-of-time", "static 2002–18 → 2019–24 Sharpe +1.04 (vs WF +0.996) — not a refit artifact"],
-        ["Character", "high-beta directional L/S (Mkt-β ≈ 1.4, vol 32%, DD −34%) + significant α — NOT market-neutral"],
+        ["Canonical", "XGBoost · broad ~4,400/mo PIT universe · 14 features (13 + chmom) · k=20/sector · 10 bps"],
+        ["Net Sharpe", "+1.08 full-OOS (2012–24) · +1.06 test (2019–24) · +0.98 long-OOS (2015–24)"],
+        ["FF5 alpha", "+18.2%/yr (long-OOS), t = +5.7 (Newey-West) — survives SMB / size control"],
+        ["Where α lives", "down-cap: on the strict top-2000 FF5 α is +1.8%/yr, t = 0.96 (n.s.) — edge is sub-top-2000"],
+        ["+ Momentum (UMD)", "FF5+UMD alpha +20.1%/yr, t = +7.4 — momentum-AVERSE (β −0.43): not a momentum artifact"],
+        ["At 30 bps/side", "Sharpe 0.91 · FF5 alpha +12.1%/yr, t = 4.39 (robust to ~50 bps)"],
+        ["Out-of-time", "static 2002–18 → 2019–24 Sharpe +1.04 (vs WF +1.00) — not a refit artifact"],
+        ["Character", "high-beta directional L/S (Mkt-β ≈ 1.3, vol 32%, DD −34%) + significant α — NOT market-neutral"],
     ]
     tbl = axn.table(cellText=rows, colWidths=[0.16, 0.84], cellLoc="left", loc="center")
     tbl.auto_set_font_size(False); tbl.set_fontsize(9.5); tbl.scale(1, 1.6)

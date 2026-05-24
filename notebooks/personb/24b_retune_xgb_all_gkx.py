@@ -24,6 +24,7 @@ import numpy as np
 import optuna
 import pandas as pd
 
+from src.data_loader import is_bankruptcy_ticker
 from src.metrics import oos_r2
 
 
@@ -49,11 +50,6 @@ FEATURES_FILE = (
 )
 
 
-def is_q_suffix_bankruptcy(t: str) -> bool:
-    t = str(t).upper().strip()
-    return len(t) >= 4 and t.endswith("Q")
-
-
 def realised_next_period(returns_wide):
     shifted = returns_wide.shift(-1)
     stacked = shifted.stack(future_stack=True).rename("y_true")
@@ -67,7 +63,7 @@ def make_train_val_qfiltered(features, returns_wide):
 
     # Q-filter at the (date, ticker) level
     tickers_lvl = X.index.get_level_values("ticker")
-    is_q = pd.Series([is_q_suffix_bankruptcy(t) for t in tickers_lvl],
+    is_q = pd.Series([is_bankruptcy_ticker(t) for t in tickers_lvl],
                      index=X.index)
     X = X.loc[~is_q]
     print(f"  Q-filter dropped {is_q.sum():,} of {len(is_q):,} rows "

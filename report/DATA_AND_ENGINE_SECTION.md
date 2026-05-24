@@ -5,13 +5,15 @@
 below has a dated entry in `DECISIONS.md`; figures live in
 `results/persona_figures/`.*
 
-> **⚠️ PARTIALLY SUPERSEDED (2026-05-24).** The canonical price path is now a
-> single Sharadar source (SEP `closeadj`, survivorship-free) on the broad
-> top-2000 universe — see **§2 of `REPORT.md`** for the current pipeline.
-> §3 below (the CRSP → yfinance splice) is **historical**: it remains in the
-> codebase (`load_prices_spliced`) as an alternative price source but is not on
-> the canonical path. §§4–10 (fundamentals, dollar volume, macro, engine,
-> sector control, sanity gate, reproducibility) are still current.
+> **⚠️ PARTIALLY SUPERSEDED (2026-05-24).** The canonical pipeline is now a
+> single Sharadar source (SEP `closeadj`, survivorship-free) on the **broad
+> ~4,400-name survivorship-free universe** — see **§2 of `REPORT.md`** for the
+> current pipeline. Two sections below are **historical**: **§2** (the strict
+> S&P-500 / fja05680 universe — now the strict-PIT *comparison baseline* in the
+> audit, not the canonical) and **§3** (the CRSP → yfinance splice —
+> `load_prices_spliced`, retained as an alternative price source). §§4–10
+> (fundamentals, dollar volume, macro, engine, sector control, sanity gate,
+> reproducibility) are still current.
 
 ---
 
@@ -36,7 +38,12 @@ produces them is the source of truth (DECISIONS 2026-04-23). A single command,
 
 ---
 
-## 2. Investable universe — no survivorship bias
+## 2. Investable universe — no survivorship bias  *(HISTORICAL — strict-S&P baseline)*
+
+> *This describes the strict S&P-500 (fja05680) universe — now the **strict-PIT
+> comparison baseline** in the audit (on which the factor-adjusted alpha is
+> insignificant), NOT the canonical. The canonical trades the broad
+> survivorship-free Sharadar union (~4,400 names/month); see REPORT §2.*
 
 The universe is the S&P 500 **as it was on each rebalance date**, not today's
 roster. `load_sp500_membership(asof)` reads the fja05680 membership table

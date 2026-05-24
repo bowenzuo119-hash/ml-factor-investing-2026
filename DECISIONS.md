@@ -1027,6 +1027,190 @@ So ~55-60% of the realised return is market beta; ~40-45% is the real factor-adj
 **Revisit if:** out-of-sample year 2025+ breaks the pattern, or if a future Person C regime model with sub-monthly frequency catches the COVID drawdown that the current monthly HMM missed.
 
 
+## 2026-05-24 — Phase 24-RT robustness addenda: Carhart momentum control + DSR trial bump
+
+Two report-locking additions to the Phase 24-RT canonical, per Bowen's pre-lock queue:
+
+**1. Carhart momentum control (FF5 + UMD).** The natural referee question on a momentum-feature-heavy strategy ("is the +18%/yr FF5 alpha just the UMD premium?") was tested directly. Source: `notebooks/persona/check_momentum_factor.py`.
+
+| Spec | α/yr | α t-stat | UMD β | UMD t-stat |
+|---|---|---|---|---|
+| FF5 (5 factors) | +17.7% | +6.11 | — | — |
+| **FF5 + UMD (Carhart 6F)** | **+20.1%** | **+7.40** | **−0.43** | **−4.61** |
+
+The portfolio is **momentum-AVERSE** (UMD β = −0.43, t = −4.61) — adding UMD as a control actually RAISES alpha from +17.7% to +20.1%/yr. The +18% FF5 alpha is therefore NOT repackaged momentum premium; it is residual cross-sectional skill. The +2.4 pp alpha increase reflects that the FF5-only spec was modestly under-stating alpha because of a small short-momentum tilt that FF5 cannot absorb.
+
+**2. DSR trial-count bump (Phase 25 N=10 → N=25).** The original Phase 25 trial list only covered the pre-audit lineage (Phases 1, 1.5, 2, 3b, 3c, 8, 14, 15). The post-audit broad-universe rebuild added ~17 more configurations evaluated on the same OOS window (23, 23a-g, 24, 24a, 24b, 24c, Optuna retunes, k-sweeps, cost-grid). An under-counted N inflates DSR; we bumped to a conservative N=25.
+
+Re-run with N=25 + repointed to `results/24_canonical_with_chmom/per_model_results.pkl`:
+
+| Window | Sharpe | Block-bootstrap 5–95% CI | P(SR ≤ 0) | **DSR (N=25)** |
+|---|---|---|---|---|
+| Test 2019–2024 (n=72) | +1.06 | [+0.48, +1.60] | 0.0016 | **0.868** |
+| Long-OOS 2015–2024 (n=120) | +0.98 | [+0.54, +1.44] | 0.0003 | **0.868** |
+
+V[SR] is kept on the original 8-trial recorded sample to avoid fabricating Sharpes for trials whose pkl-recorded values would have to be back-fitted; the N=25 alone drives the harder penalty via √(2 ln N). Result: even after penalising 25 trials, ~87% posterior probability that the true SR exceeds the expected-max under the null.
+
+**Files changed (this entry):**
+- `notebooks/personb/25_statistical_robustness_broad.py` — PHASE_DIR repointed to `24_canonical_with_chmom`; N_TRIALS 10→25; docstring updated.
+- `results/25_statistical_robustness_broad/summary.json` regenerated.
+- `report/REPORT.md` §5 (Momentum control table), §6 (DSR addendum + IC-vs-Sharpe + annualisation footnote).
+
+**Conclusion:** Phase 24-RT survives both rigor checks Bowen flagged. No model change required; canonical stays Phase 24-RT.
+
+
+## 2026-05-24 — Universe-label audit: "top-2,000" is wrong; canonical is the broad survivorship-free union (~4,400 names/month median)
+
+**Context:** Bowen ran an audit on what the Phase 24-RT canonical actually trades and discovered the report's universe description ("top 2,000 US common stocks by market cap") is inaccurate. The engine's eligibility filter (`load_universe_at`) returns every name that *was* in the rolling top-2,000 at any prior month-end and is still trading on the rebalance date — i.e. the survivorship-free union — rather than the strict rolling top-2,000 each month. Median monthly position-eligible count is ~4,400 names, not ~2,000.
+
+This is what makes the panel survivorship-free, and it is also what drives the +18%/yr FF5 alpha: the additional names beyond the current top-2,000 are predominantly small/mid-cap stocks that *used* to be in the top-2,000 (or rose toward it before delisting/falling out). To test where the alpha actually lives, Bowen re-ran the canonical recipe on a strict rolling top-2,000 sub-universe (`notebooks/persona/canonical_true_top2000.py`):
+
+| Universe | Median names/month | FF5 α/yr | α t-stat | Mkt-β | SMB β |
+|---|---|---|---|---|---|
+| Broad survivorship-free (canonical) | ~4,400 | +18.18% | +5.74 | +1.30 | +1.26 |
+| Strict rolling top-2,000 | ~2,000 | +1.80% | +0.96 | +0.28 | +0.15 |
+
+**Decision:** Keep the broad survivorship-free panel as the canonical (numbers don't change), but **rewrite the universe description** in the abstract, §3, §5, and §6 so the panel is honestly characterised. Frame the down-cap concentration as the central finding (GKX-style: ML cross-sectional alpha lives in the small/mid-cap tail) rather than as a caveat.
+
+**Reasoning:**
+1. The numbers are real, PIT-clean, survivorship-free, and reproducible — the only error is the *label*, not the result.
+2. A broad survivorship-free universe is the GKX-2020-standard choice; using it is methodologically *more* defensible than a strict rolling top-N would have been.
+3. The down-cap concentration is exactly the academic prediction (GKX 2020 §V, Avramov-Cheng-Metzker 2023). Confirming it on our independent rebuild is a positive contribution, not a negative caveat.
+4. The capacity/cost caveats follow directly: alpha in the down-cap tail is genuinely harder to harvest at deployable AUM. §6 documents this honestly.
+
+**Files changed:**
+- `report/REPORT.md` — abstract universe sentence, §3 universe sentence, §5 final-canonical caption, new §5 "Where the alpha lives" decomposition block (table + GKX framing), strengthened §6 "Costs and capacity" subsection.
+- Pending (Bowen): universe labels on `results/persona_figures/universe_*.png`, §2 universe paragraph relabel, top-2,000 decomposition note in §2.
+
+**Status:** Numbers locked, framing honest. Same shape of correction as the survivorship-leak relabel from 2026-05-23.
+
+
+## 2026-05-24 — Q-filter bug: `endswith("Q") AND len>=4` wrongly drops NDAQ and IONQ; gate on `isdelisted=="Y"` too
+
+**Context:** The bankrupt-ticker filter rule `len(t) >= 4 and t.endswith("Q")` was meant to drop SHARADAR's Q-suffix delisted bankruptcy filings (LEHMQ, ENRNQ, SIVBQ, INTEQ — terminal-price patterns that can manufacture spurious alpha). Bowen discovered it also drops **NDAQ (Nasdaq Inc.)** and **IONQ (IonQ Inc.)** — both alive common stock, neither bankrupt.
+
+The fix gates the rule on SHARADAR/TICKERS `isdelisted=="Y"`:
+
+```python
+def is_bankruptcy_ticker(t: str) -> bool:
+    t = str(t).upper().strip()
+    if len(t) < 4 or not t.endswith("Q"):
+        return False
+    return t in _delisted_set()  # SHARADAR tickers.isdelisted=='Y'
+```
+
+**Decision:** Bowen ships the corrected function in `src/data_loader.py`; all 10 callsites migrate to it (`src/factors.py`, `notebooks/personb/{23c,23d,23e,23g,24,24a,24b,24c}*.py`, `notebooks/persona/{out_of_time_test,regime_overlay_ablation_broad}.py`). Bowen re-runs Phase 24-RT canonical to verify the headline doesn't move (expect within ±0.02 Sharpe / ±0.5 t-stat; adding 2 alive large-caps to a ~4,400-name universe shouldn't shift the cross-section).
+
+**Reasoning:**
+1. The original rule was a fast heuristic that happened to work on Sharadar's convention (delisted bankruptcy tickers get a Q suffix), but a small handful of alive tickers also end in Q. Gating on `isdelisted=="Y"` makes the filter unambiguous.
+2. Re-running on Phase 24-RT verifies the bug didn't materially shape the result — if the headline moves >0.02 Sharpe, we discuss before locking.
+
+**Files changed (this entry):**
+- (Pending Bowen) `src/data_loader.py` — new `is_bankruptcy_ticker()` function.
+- (Pending Bowen) the 10 callsites listed above.
+- (Pending Bowen) Phase 24-RT canonical re-run + headline diff report.
+
+**Status:** Code change in flight; numbers expected to be within noise.
+
+
+## 2026-05-24 — Q-fix validation: corrected filter MOVES the headline (+0.116 Sharpe, +1.48 t); decomposed NDAQ vs IONQ; canonical re-baselined
+
+**Context:** Bowen ran the q-filter fix validation in `notebooks/persona/canonical_qfix_validate.py` (two-arm: same Phase 24-RT recipe, only the filter differs). Result EXCEEDS our ±0.02 Sharpe / ±0.5 t-stat discuss threshold:
+
+| Arm | Full-OOS Sharpe | FF5 α/yr | α t-stat |
+|---|---|---|---|
+| OLD (symbol-only — buggy) | +1.037 | +15.7% | +5.38 |
+| **NEW (`is_bankruptcy_ticker`) — corrected** | **+1.153** | **+18.7%** | **+6.85** |
+| Δ | **+0.116** | **+3.0 pp** | **+1.48** |
+
+Bowen then ran `notebooks/persona/decompose_qfix.py` to split the +0.116 Sharpe by which un-dropped ticker drives it:
+
+| Arm | Full-OOS Sharpe | FF5 α t-stat | Δ vs OLD |
+|---|---|---|---|
+| OLD (drops both) | +1.037 | +5.38 | baseline |
+| + NDAQ only (drop IONQ) | +1.111 | +6.26 | +0.074 Sharpe, +0.88 t |
+| + NDAQ + IONQ (corrected) | +1.153 | +6.85 | +0.116 Sharpe, +1.48 t |
+
+**Decomposition reading:** ~2/3 of the delta is NDAQ (Nasdaq Inc — a real large-cap exchange that the buggy filter was wrongly excluding; the rise is **legitimate**); ~1/3 is IONQ (a 2021 high-vol quantum SPAC — the **fragile** part).
+
+**Decision:** Re-baseline the headline to the corrected filter as the authoritative canonical:
+- Abstract: full-OOS Sharpe **+1.15**, FF5 α **+18.7%/yr at t=+6.85**.
+- §5 final-canonical table: same, with long-OOS and test-OOS rows shown as delta-shifted estimates (committed pkl numbers + Bowen's +0.116 / +3 pp / +1.48 delta) until the canonical pkl is re-frozen on Bowen's machine.
+- §6 new "Bankrupt-ticker filter — sensitivity" subsection documenting the +0.12 Sharpe swing and the NDAQ-vs-IONQ decomposition. Frames the IONQ contribution (~+0.04 Sharpe) as concrete name-fragility evidence in the down-cap tail — the same fragility the capacity caveat warns about, here visible in one name.
+- Pre-correction (buggy-filter) numbers preserved as a "for reference" paragraph below the §5 table for full audit trail.
+
+**Reasoning:**
+1. The corrected filter is unambiguously the right rule (gates on `SHARADAR.tickers.isdelisted == 'Y'`); the symbol-only heuristic was a bug.
+2. The +0.116 Sharpe swing is decomposable: 2/3 is a legitimate correction (un-dropping a real large-cap), 1/3 is concrete name-fragility evidence — both worth reporting honestly.
+3. Both pre- and post-correction versions clear every robustness gate (DSR, bootstrap, Carhart momentum control, cost grid). The qualitative result is unchanged.
+
+**Re-baseline pending:** the canonical `24_canonical_with_chmom.py` pkl needs to be re-frozen on Bowen's machine (Nicolas tried locally and hit `FileNotFoundError: data/raw/sharadar/tickers.parquet` — that raw file lives only on Bowen's Sharadar pull, required by `is_bankruptcy_ticker`). Once Bowen re-freezes the pkl, Nicolas (a) replaces the delta-shifted long-OOS and test-OOS row estimates with authoritative per-window numbers, (b) re-runs Phase 25 (DSR + bootstrap) on the new pkl, (c) updates §6's DSR table. Then merge to main.
+
+**Files changed (this entry):**
+- `report/REPORT.md` Abstract + §5 final-canonical table + §6 new "Bankrupt-ticker filter — sensitivity" subsection.
+- DECISIONS.md (this entry).
+
+**Status:** Report updated to corrected headline; canonical pkl re-freeze pending on Bowen's machine.
+
+
+## 2026-05-24 — INCLUDE_FEATURES bug: committed 24-RT pkl was silently a 16-feature run
+
+**Context:** While re-freezing the canonical pkl with the corrected Q-filter, Bowen got Sharpe ~+1.01 instead of the expected ~+1.15. Root cause: `notebooks/personb/24_canonical_with_chmom.py` reads `data/processed/features_broad_sharadar_with_chmom_maxret.parquet` and applies the Q-row-filter, but never subsets the *columns* to its declared `INCLUDE_FEATURES` list. When the features parquet only had the 14 declared columns (13 + chmom), this was harmless. But Bowen had added `maxret` and `mom36m` to that same parquet to support the Phase 24b test (→ 16 columns), and the canonical driver silently picked them up — so what was published as "Phase 24-RT" was actually the Phase 24b 16-feature config.
+
+We had previously A/B-tested 14 vs 16 features and **rejected** the 16-feature variant: Phase 24b val R² was lower (+0.0046 vs +0.0055), and the walk-forward Sharpe was worse (+0.97 vs the legit 14-feature ~+1.15). The committed pkl was therefore the rejected config sailing under the canonical name.
+
+**The two bugs partially cancelled** in the committed pkl: the Q-filter bug dropped legitimate names (NDAQ, IONQ) and pulled Sharpe DOWN by ~0.12; the INCLUDE_FEATURES bug forced the 16-feature variant and pulled Sharpe DOWN by ~0.10. The double-buggy pkl reported Sharpe +1.08 — close to the corrected canonical's +1.15 but for the wrong reasons.
+
+**Decision:** Bowen added the missing `features = features[list(INCLUDE_FEATURES) + ["sector"]]` subset line to `24_canonical_with_chmom.py` (honouring its declared 14-feature `INCLUDE_FEATURES`), and is re-freezing the pkl with BOTH bugs fixed simultaneously. The corrected pkl is the authoritative Phase 24-RT canonical; the report's abstract / §5 / §6 already cite Bowen's `canonical_qfix_validate.py` numbers (which used the correct 14-feature recipe by construction), so the headline +1.15 / +18.7%/yr / t=+6.85 stands as-is.
+
+**Reasoning:**
+1. The fix is unambiguous — the driver should honour its declared INCLUDE_FEATURES list; the previous behaviour was a silent feature-leak across phase scripts that share the same parquet.
+2. The headline numbers in the report are NOT affected, because Bowen's qfix-validate hardcoded the 14-feature column subset and was the source for the report's headline.
+3. Per-window long-OOS and test-OOS numbers in §5 will be updated to authoritative values once the re-freeze lands; current values are delta-shifted estimates from the (double-buggy) committed pkl.
+4. Phase 26 name-concentration ablation (LSCG +0.087 Sharpe) was run on the (double-buggy) committed pkl. The qualitative finding (a single name can move Sharpe by ~0.05–0.10) is robust to the bug correction, since the universe of names is shared between buggy and fixed pkls. Numerical re-validation pending on the corrected pkl.
+
+**Files changed (this entry):**
+- (Pending Bowen) `notebooks/personb/24_canonical_with_chmom.py` — add the `INCLUDE_FEATURES` subset line.
+- (Pending Bowen) `results/24_canonical_with_chmom/per_model_results.pkl` — re-freeze with both bugs fixed.
+- `report/REPORT.md` §5 final-canonical table caption updated to disclose the two bugs and the partial cancellation; §6 name-concentration block flagged as "numbers pending re-validation on corrected pkl".
+- DECISIONS.md (this entry).
+
+**Status:** Re-freeze in flight on Bowen's machine; once it lands, Nicolas updates §5 per-window numbers + re-runs Phase 25 DSR + re-runs Phase 26 name-concentration ablation on the corrected pkl.
+
+
+## 2026-05-24 — Phase 27 dense k-sweep on corrected Phase 24-RT predictions: k=20 sits at the edge of a flat plateau (k=10..20)
+
+**Context:** Phase 24c earlier swept k ∈ {1, 2, 3, 5, 7, 10, 15, 20, 30, 50} on Phase 24-RT predictions and locked k=20. We re-ran on a much denser grid (`notebooks/personb/27_k_sweep_dense.py`, k ∈ {1..30} every-1 plus {35, 40, 45, 50, 60, 75, 100}) on the corrected 14-feature pkl to confirm k=20 is in the optimum region, not just a coarse-grid winner.
+
+Method: post-process the canonical's PREDICTIONS (not weights) — each k value gets fresh top-k/bottom-k picks per GICS sector per rebalance, dollar-neutral, with the same engine cost model (10 bps/side L1 turnover). No model re-runs; all k values share the same trained XGBoost + features + universe + bug-corrected pkl.
+
+**Per-window optimal k:**
+
+| Window | Optimal k | Optimal Sharpe | k=20 canonical Sharpe | Δ vs canonical |
+|---|---|---|---|---|
+| Full-OOS 2012–24 | 16 | +1.174 | +1.153 | −0.021 |
+| Long-OOS 2015–24 | 16 | +0.993 | +0.979 | −0.014 |
+| Test 2019–24 | 12 | +0.969 | +0.935 | −0.034 |
+
+**Sharpe curve shape:** sharp drop-off below k=5 (k=1 gives Sharpe +0.56 due to concentration + turnover drag), broad flat plateau k=10..20 (Sharpe within ±0.02 of peak everywhere on full+long-OOS), smooth decay above k=25 (k=50 gives +0.93, k=100 gives +0.78 due to over-diversification and signal wash-out). Median positions per rebalance scales linearly with k: k=10 → 220 positions, k=20 → 440, k=50 → 1,100.
+
+**Decision:** Keep k=20 as the canonical. The dense sweep confirms it is in the optimum region (peak-to-canonical difference within ±0.03 Sharpe on every window), and the case for retuning to k=16 (a tiny +0.02 Sharpe improvement at the cost of slightly tighter book breadth and slightly less defensible round-number choice) is not compelling enough to re-lock the canonical so close to the report freeze.
+
+**Reasoning:**
+1. The Sharpe curve is genuinely flat between k=10 and k=20 — within reproduction-noise of the q-filter fix (±0.12 Sharpe) and the single-name fragility (±0.09 Sharpe), the k=16 vs k=20 difference (±0.02 Sharpe) is in the noise floor.
+2. k=20 was chosen ex-ante for round-number defensibility (it has been the canonical since Phase 23b). Switching to k=16 post-hoc on a ±0.02 Sharpe basis would be a textbook example of in-sample overfitting on what is essentially noise.
+3. Test-OOS prefers k=12 (Sharpe +0.969) over k=20 (+0.935) — a +0.034 swing that is the largest in the table. But test-OOS is the shortest window (n=72) with the highest sampling variance, so reading too much into it would be optimistic.
+4. Position count at k=20 (~440) is the broader-diversification end of the plateau, which the §6 single-name-fragility caveat (LO study showing LSCG +0.089 Sharpe) suggests is the right side to err on.
+
+**Files added (this entry):**
+- `notebooks/personb/27_k_sweep_dense.py` — dense sweep script.
+- `results/27_k_sweep_dense/sweep_metrics.csv` — 37-row table.
+- `results/27_k_sweep_dense/k_sweep_dense.png` — the curve figure.
+- `report/REPORT.md` §3 — new "Choice of k (book breadth)" paragraph with the per-window table + plateau description.
+
+**Revisit if:** a future canonical at a different feature count or cost basis shifts the plateau materially; or if a capacity-aware re-run pulls k optimum higher (more diversification per rebalance lowers per-name impact).
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:

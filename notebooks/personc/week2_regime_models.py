@@ -108,7 +108,11 @@ nan_check = df[FEATURE_COLS].isnull().sum()
 if nan_check.any():
     print("\n  ⚠ Missing values detected — forward-filling:")
     print(nan_check[nan_check > 0].to_string())
-    df[FEATURE_COLS] = df[FEATURE_COLS].ffill().bfill()
+    # Forward-fill only -- backward-fill would leak future observations into
+    # earlier months (look-ahead bias). Any NaN that remains after ffill
+    # (i.e. at the start of the series before the first observation) is
+    # dropped from the modelling sample upstream by week1's lag + trim.
+    df[FEATURE_COLS] = df[FEATURE_COLS].ffill()
 
 # ── Standardise features (mandatory before GMM / HMM) ─────────────────────────
 # Each feature is on a different scale (e.g. VIX in points, yields in %).
