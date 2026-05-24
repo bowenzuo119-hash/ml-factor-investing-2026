@@ -9,6 +9,9 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+# Exception: report/build/ contains compiled submission PDFs (kept in version control)
+!report/build/
+!report/build/**
 develop-eggs/
 dist/
 downloads/
