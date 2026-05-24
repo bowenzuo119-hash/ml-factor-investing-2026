@@ -34,8 +34,8 @@ corrected bankrupt-ticker filter, and a **Fama-French 5-factor alpha of
 robust to every sensitivity check we ran (Carhart momentum control,
 block-bootstrap, deflated Sharpe at N=25 trials, cost-grid stress).
 Long-OOS (2015–2024) and test (2019–2024) windows show the same
-qualitative result with all Sharpes above +1.0 and alpha t-stats above
-+5 (see §5 for the full window-by-window table). Under the more
+qualitative result with all Sharpes above +0.95 and alpha t-stats at or
+above +5 (see §5 for the full window-by-window table). Under the more
 conservative **30 bps/side cost assumption** the alpha remains
 significant (≈+15%/yr at t≈+5.9), justified by the strategy's
 small/mid-cap tilt and 175% monthly turnover; α stays significant up to
@@ -474,7 +474,7 @@ The portfolio is **momentum-averse** (UMD β = −0.43, t = −4.61) — short l
 - [Equity curve (Phase 24-RT)](../results/final_canonical_plots/equity_curve_phase24_honest.png) — cumulative growth of $1 on log scale, with **SPY benchmark** and **β-hedged pure-alpha curve** alongside the raw XGBoost line. The decomposition is the headline visual: the raw line includes ~1.3× leveraged market exposure, the β-hedged line shows the genuine cross-sectional skill.
 - [Drawdown (Phase 24-RT)](../results/final_canonical_plots/drawdown_phase24.png) — drawdown trajectory: XGBoost vs SPY vs β-hedged
 - [FF5 decomposition (Phase 24-RT)](../results/final_canonical_plots/ff5_decomposition_phase24.png) — annualised return broken into pure alpha + factor contributions
-- [Phase progression](../results/final_canonical_plots/phase_progression_phase24.png) — Sharpe history: Phase 14 (leaky +1.49) → Phase 15 (PIT collapse −0.31) → Phase 22 (S&P honest +0.31) → Phase 23g (broad +0.95) → Phase 24-RT (final +0.98)
+- [Phase progression](../results/final_canonical_plots/phase_progression_phase24.png) — **long-OOS** Sharpe history (2015–2024, held constant across phases for an apples-to-apples view): Phase 14 (leaky +1.49) → Phase 15 (PIT collapse −0.31) → Phase 22 (S&P honest +0.31) → Phase 23g (broad +0.95) → Phase 24-RT (final long-OOS +0.98; full-OOS headline +1.15)
 - [Long-leg vs short-leg decomposition](../results/long_short_decomp/long_short_decomp_phase24.png) — three-line cumulative growth showing the long leg does ~all the work (+38%/yr) while the short leg is a near-zero-P&L hedge (−2%/yr). Confirms the "long high-conviction stocks + token short hedge" characterisation.
 
 ### Regime overlay sensitivity (per Person A's Phase 23g ablation, applies to Phase 24-RT)
@@ -727,16 +727,16 @@ few names.
 
 ### Annualisation convention
 
-All Sharpe ratios in this report use **monthly mean / monthly std × √12**
-on the engine's stored `portfolio_returns` series (the realised, post-cost
-net return labelled by realisation date). Reported numbers can differ by
-±0.05 depending on whether the same series is reduced through
-`metrics.parquet` (uses pandas std with ddof=1, full-OOS = +1.03), the raw
-mean/std/√12 (full-OOS = +1.08), or Bowen's cost-grid arithmetic on the
-same returns (full-OOS = +1.05). We adopt **+1.08 full-OOS / +0.98
-long-OOS / +1.06 test** as the headline; the others are reconciliations of
-the same underlying series via different reductions and are noted here for
-transparency.
+All Sharpe ratios in this report use the `metrics.sharpe_ratio` convention —
+**geometric annualised return ÷ (monthly std, ddof=1, × √12)** — on the
+engine's stored `portfolio_returns` series (the realised, post-cost net
+return labelled by realisation date). On the corrected 14-feature pkl the
+choice of reduction barely matters: full-OOS, the canonical
+`sharpe_ratio` / `metrics.parquet` value is **+1.15**, the arithmetic
+mean/std × √12 is +1.14, and the population-std (ddof=0) variant is +1.14 —
+a spread under 0.02. We report **+1.15 full-OOS / +0.97 long-OOS / +1.00
+test** (the §5 table) as the headline; the alternative reductions agree to
+within rounding and are noted here only for transparency.
 
 ### Other limitations
 
