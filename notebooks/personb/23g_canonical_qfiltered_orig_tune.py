@@ -31,6 +31,7 @@ import numpy as np
 import pandas as pd
 
 from src.backtest import run_walk_forward_backtest, RegimeParams
+from src.data_loader import is_bankruptcy_ticker
 from src.metrics import (
     information_coefficient,
     oos_r2,
@@ -53,13 +54,6 @@ with open(_PARAMS_FILE) as _f:
 RETUNED_XGB_PARAMS = _bp["xgboost"]["best_params"]
 RETUNED_LASSO_PARAMS = _bp["lasso"]["best_params"]
 RETUNED_NN_PARAMS = _bp["nn"]["best_params"]
-
-
-def is_q_suffix_bankruptcy(t: str) -> bool:
-    """Sharadar's bankruptcy convention: ticker ends in 'Q' (length >=4).
-    See Phase 23c docstring for full justification."""
-    t = str(t).upper().strip()
-    return len(t) >= 4 and t.endswith("Q")
 
 
 # --------------------------------------------------------------------------
@@ -393,7 +387,7 @@ def main() -> int:
     # passing to the engine. Now the model is trained on, predicts on, and
     # trades only legitimately-tradable names.
     tickers = features.index.get_level_values("ticker")
-    is_q = pd.Series([is_q_suffix_bankruptcy(t) for t in tickers],
+    is_q = pd.Series([is_bankruptcy_ticker(t) for t in tickers],
                      index=features.index)
     features = features.loc[~is_q]
     print(f"  Q-filter dropped {int(is_q.sum()):,} bankrupt-ticker rows "
@@ -401,7 +395,7 @@ def main() -> int:
     print(f"  features shape (Q-filtered): {features.shape}")
 
     # Also drop Q-tickers from the returns wide panel
-    q_cols = [c for c in returns_wide.columns if is_q_suffix_bankruptcy(c)]
+    q_cols = [c for c in returns_wide.columns if is_bankruptcy_ticker(c)]
     returns_wide = returns_wide.drop(columns=q_cols)
     print(f"  returns: dropped {len(q_cols)} Q-ticker columns; "
           f"new shape {returns_wide.shape}")
