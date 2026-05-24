@@ -1027,6 +1027,38 @@ So ~55-60% of the realised return is market beta; ~40-45% is the real factor-adj
 **Revisit if:** out-of-sample year 2025+ breaks the pattern, or if a future Person C regime model with sub-monthly frequency catches the COVID drawdown that the current monthly HMM missed.
 
 
+## 2026-05-24 — Phase 24-RT robustness addenda: Carhart momentum control + DSR trial bump
+
+Two report-locking additions to the Phase 24-RT canonical, per Bowen's pre-lock queue:
+
+**1. Carhart momentum control (FF5 + UMD).** The natural referee question on a momentum-feature-heavy strategy ("is the +18%/yr FF5 alpha just the UMD premium?") was tested directly. Source: `notebooks/persona/check_momentum_factor.py`.
+
+| Spec | α/yr | α t-stat | UMD β | UMD t-stat |
+|---|---|---|---|---|
+| FF5 (5 factors) | +17.7% | +6.11 | — | — |
+| **FF5 + UMD (Carhart 6F)** | **+20.1%** | **+7.40** | **−0.43** | **−4.61** |
+
+The portfolio is **momentum-AVERSE** (UMD β = −0.43, t = −4.61) — adding UMD as a control actually RAISES alpha from +17.7% to +20.1%/yr. The +18% FF5 alpha is therefore NOT repackaged momentum premium; it is residual cross-sectional skill. The +2.4 pp alpha increase reflects that the FF5-only spec was modestly under-stating alpha because of a small short-momentum tilt that FF5 cannot absorb.
+
+**2. DSR trial-count bump (Phase 25 N=10 → N=25).** The original Phase 25 trial list only covered the pre-audit lineage (Phases 1, 1.5, 2, 3b, 3c, 8, 14, 15). The post-audit broad-universe rebuild added ~17 more configurations evaluated on the same OOS window (23, 23a-g, 24, 24a, 24b, 24c, Optuna retunes, k-sweeps, cost-grid). An under-counted N inflates DSR; we bumped to a conservative N=25.
+
+Re-run with N=25 + repointed to `results/24_canonical_with_chmom/per_model_results.pkl`:
+
+| Window | Sharpe | Block-bootstrap 5–95% CI | P(SR ≤ 0) | **DSR (N=25)** |
+|---|---|---|---|---|
+| Test 2019–2024 (n=72) | +1.06 | [+0.48, +1.60] | 0.0016 | **0.868** |
+| Long-OOS 2015–2024 (n=120) | +0.98 | [+0.54, +1.44] | 0.0003 | **0.868** |
+
+V[SR] is kept on the original 8-trial recorded sample to avoid fabricating Sharpes for trials whose pkl-recorded values would have to be back-fitted; the N=25 alone drives the harder penalty via √(2 ln N). Result: even after penalising 25 trials, ~87% posterior probability that the true SR exceeds the expected-max under the null.
+
+**Files changed (this entry):**
+- `notebooks/personb/25_statistical_robustness_broad.py` — PHASE_DIR repointed to `24_canonical_with_chmom`; N_TRIALS 10→25; docstring updated.
+- `results/25_statistical_robustness_broad/summary.json` regenerated.
+- `report/REPORT.md` §5 (Momentum control table), §6 (DSR addendum + IC-vs-Sharpe + annualisation footnote).
+
+**Conclusion:** Phase 24-RT survives both rigor checks Bowen flagged. No model change required; canonical stays Phase 24-RT.
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
