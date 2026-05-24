@@ -98,8 +98,9 @@ python -m notebooks.persona.validate_sharadar_returns
 python -m notebooks.personb.compute_chmom_maxret_features   # +chmom, +maxret
 python -m notebooks.persona.add_mom6m_mom36m                # +mom36m (mom6m dropped, redundant)
 
-# 3. canonical walk-forward (XGBoost, 13 features, Q-filter, PIT, k=20)
-python -m notebooks.personb.23g_canonical_qfiltered_orig_tune
+# 3. canonical walk-forward (XGBoost, 14 features, Q-filter, PIT, k=20)
+python -m notebooks.personb.24_canonical_with_chmom          # Phase 24-RT (FINAL canonical)
+# python -m notebooks.personb.23g_canonical_qfiltered_orig_tune  # 13-feature predecessor / baseline
 
 # 4. audit + cost robustness of the headline
 python -m notebooks.persona.verify_phase23_headline      # FF5 alpha, dollar-neutrality
@@ -111,7 +112,7 @@ python -m notebooks.persona.regime_overlay_ablation_broad  # overlay with/withou
 python -m notebooks.persona.overlay_failure_diagnostic     # COVID-timing diagnostic
 ```
 
-The **canonical is the 13-feature 23g** run: adding the GKX `chmom`/`maxret`/`mom36m` features (a "24b" 16-feature variant) was tested and **did not improve** the headline (Sharpe 1.07 → 0.97 on the original tune), so they are kept in the panel but excluded from the canonical feature set.
+The **canonical is the 14-feature Phase 24-RT** run (13 base features + GKX `chmom`, retuned). `chmom` adds a small lift over the 13-feature 23g predecessor; the *further* GKX features `maxret` + `mom36m` (a 16-feature "24b" variant) were tested and **did not improve** the headline (Sharpe fell to ~0.97), so they remain in the panel for sensitivity reference but are excluded from the canonical `INCLUDE_FEATURES`.
 
 ## Reproducibility rules
 
