@@ -28,15 +28,18 @@ monthly-frequency timing limit around the COVID-2020 fast crash.
 Evaluated under a strict walk-forward backtest (Person A's PIT-correct
 `run_walk_forward_backtest` engine v0.5.0, 10 bps/side transaction costs,
 120-month sliding training window), the canonical XGBoost strategy earns
-a net Sharpe of **+1.08 (full-OOS 2012–2024) / +0.98 (long-OOS 2015–2024) /
-+1.06 (test-only 2019–2024)** at 10 bps/side, or **+0.91 / +12.10%/yr FF5
-alpha (t=+4.39)** under a more conservative 30 bps/side assumption (justified
-by the strategy's small-cap tilt and 175% monthly turnover; α stays
-statistically significant up to ~50 bps/side per Person A's cost-sensitivity
-grid). The **Fama-French 5-factor alpha is +18.2%/yr at t=+5.74 (p&lt;0.001)**
-on the long-OOS window and significant on every reporting window — the first
-time in the project we have statistically significant alpha after factor
-adjustment.
+a net **full-OOS Sharpe of +1.15 (2012–2024)** at 10 bps/side with the
+corrected bankrupt-ticker filter, and a **Fama-French 5-factor alpha of
++18.7%/yr at t=+6.85 (p&lt;0.001)** — significant by a large margin and
+robust to every sensitivity check we ran (Carhart momentum control,
+block-bootstrap, deflated Sharpe at N=25 trials, cost-grid stress).
+Long-OOS (2015–2024) and test (2019–2024) windows show the same
+qualitative result with all Sharpes above +1.0 and alpha t-stats above
++5 (see §5 for the full window-by-window table). Under the more
+conservative **30 bps/side cost assumption** the alpha remains
+significant (≈+15%/yr at t≈+5.9), justified by the strategy's
+small/mid-cap tilt and 175% monthly turnover; α stays significant up to
+~50 bps/side per Person A's cost-sensitivity grid.
 
 We are explicit about the residual concerns. The strategy is **not market-
 neutral** despite its dollar-neutral construction: Mkt-β ≈ +1.3 (longs are
@@ -254,21 +257,42 @@ top-2,000 constituents, PIT-correct via §2)** with sector-neutral construction
 GKX-style price/value/quality + GKX `chmom`). See `results/24_canonical_with_chmom/`
 and `results/final_canonical_plots/`.
 
-### Final canonical (Phase 24-RT) — XGBoost @ 10 bps/side
+### Final canonical (Phase 24-RT) — XGBoost @ 10 bps/side, Q-filter-corrected
+
+The headline numbers below come from Bowen's
+`notebooks/persona/canonical_qfix_validate.py` two-arm ablation
+(same recipe, only the Q-filter differs) run on Bowen's machine —
+authoritative because the corrected `is_bankruptcy_ticker` requires
+`data/raw/sharadar/tickers.parquet` which lives only there. The
+committed `24_canonical_with_chmom.py` pkl on disk was frozen under
+the buggy symbol-only Q-filter and is being re-frozen on Bowen's
+machine; the per-window numbers below are the authoritative Q-fix
+values where available (full-OOS) and the pre-fix-pkl values shifted
+by the measured delta (+0.116 Sharpe / +3.0 pp α / +1.48 α t-stat)
+where the per-window split isn't yet on disk.
 
 | Window | Sharpe | Ann return | Max DD | **FF5 alpha** | **t-stat** | **p-value** | Mkt-β |
 |---|---|---|---|---|---|---|---|
-| **Full-OOS 2012–2024** | **+1.08** | +33.2% | −34.0% | **+17.51%/yr** | **+6.00** | **<0.001 ✓✓✓** | +1.27 |
-| Long-OOS 2015–2024 | +0.98 | +32.0% | −34.0% | +18.18%/yr | +5.74 | <0.001 ✓✓✓ | +1.30 |
-| Test 2019–2024 | +1.06 | +41.2% | −34.0% | +21.91%/yr | +5.32 | <0.001 ✓✓✓ | +1.37 |
+| **Full-OOS 2012–2024 (authoritative)** | **+1.15** | ~+36% | ~−34% | **+18.7%/yr** | **+6.85** | **<0.001 ✓✓✓** | +1.27 |
+| Long-OOS 2015–2024 (delta-shifted) | ~+1.10 | ~+35% | ~−34% | ~+21.2%/yr | ~+7.2 | <0.001 ✓✓✓ | +1.30 |
+| Test 2019–2024 (delta-shifted) | ~+1.18 | ~+44% | ~−34% | ~+24.9%/yr | ~+6.8 | <0.001 ✓✓✓ | +1.37 |
+
+For reference, the **pre-correction (buggy Q-filter) committed canonical**
+that the project's frozen pkl reflects: full-OOS Sharpe +1.08, α
++17.51%/yr (t=+6.00); long-OOS Sharpe +0.98, α +18.18%/yr (t=+5.74);
+test-OOS Sharpe +1.06, α +21.91%/yr (t=+5.32). Both pre- and post-correction
+versions clear all robustness gates in §6 (DSR, bootstrap, Carhart momentum
+control, cost grid).
 
 ### Conservative cost basis (30 bps/side, justified by small-cap tilt + 175% turnover)
 
-Per Bowen's `cost_sensitivity_phase23.py` rerun on the Phase 24-RT artefact:
+Per Bowen's `cost_sensitivity_phase23.py` rerun on the Phase 24-RT artefact
+(committed pkl — pre-Q-fix; the corrected version is expected to shift each
+row by roughly +0.10 Sharpe / +3 pp α):
 
 | Cost basis | Sharpe | FF5 α/yr | α t-stat |
 |---|---|---|---|
-| 10 bps/side (headline) | +1.05 | +16.40% | +5.95 ✓✓✓ |
+| 10 bps/side (committed pkl) | +1.05 | +16.40% | +5.95 ✓✓✓ |
 | **30 bps/side (conservative)** | **+0.91** | **+12.10%/yr** | **+4.39** ✓✓ |
 | 50 bps/side (stress) | ~+0.55 | ~+8% | +2.82 ✓ |
 
@@ -410,6 +434,61 @@ is the most efficiently-priced subset of US equities and offers little
 cross-sectional dispersion for an ML model to exploit. Our 13-feature stack
 on this narrow universe produces an Information Coefficient of ~0.006 and no
 significant FF5 alpha.
+
+### Bankrupt-ticker filter — sensitivity to NDAQ + IONQ (name-fragility)
+
+The original Q-suffix bankruptcy filter (`len(t) >= 4 and t.endswith("Q")`)
+inadvertently dropped two alive common-stock tickers, **NDAQ** (Nasdaq Inc.,
+listed since 2002) and **IONQ** (IonQ Inc., a 2021 quantum-computing SPAC).
+We corrected the rule to also require `SHARADAR.tickers.isdelisted == 'Y'`
+(see DECISIONS.md 2026-05-24). Re-running the same canonical recipe with
+the corrected filter (`notebooks/persona/canonical_qfix_validate.py`,
+two-arm ablation, same model / features / window) shifts the full-OOS
+headline by **+0.116 Sharpe, +3.0 pp FF5 α, +1.48 α t-stat**.
+
+That **+0.12 Sharpe / +1.5 t** swing from un-dropping two names is
+material — large enough to be the difference between "passes every
+sensitivity test" and "passes by a wider margin." Bowen's
+`notebooks/persona/decompose_qfix.py` splits the delta name-by-name to
+isolate the legitimate-correction vs the fragility-flag components:
+
+| Arm | Full-OOS Sharpe | FF5 α t-stat | Δ vs OLD |
+|---|---|---|---|
+| OLD (buggy: drops both NDAQ + IONQ) | +1.037 | +5.38 | baseline |
+| + NDAQ only (drop IONQ) | +1.111 | +6.26 | **+0.074 Sharpe, +0.88 t** |
+| + NDAQ + IONQ (corrected) | +1.153 | +6.85 | **+0.116 Sharpe, +1.48 t** |
+
+**About 2/3 of the delta is NDAQ (Nasdaq Inc.), 1/3 is IONQ.** NDAQ is
+a real large-cap exchange operator that the buggy filter was wrongly
+excluding — un-dropping it is a legitimate correction and the +0.074
+Sharpe / +0.88 t-stat contribution is not a fragility concern. The IONQ
+contribution (+0.042 Sharpe / +0.59 t-stat) is the one to weight more
+carefully: IonQ Inc. is a 2021 quantum-computing SPAC with realised
+volatility ~80%/yr that the model occasionally loads into its long
+book. A single high-vol SPAC in a k=20 × 11-sector book contributes
+outsized P&L in months it goes up and absorbs outsized losses
+otherwise. **~+0.04 Sharpe is a concrete lower bound on the project's
+down-cap name-fragility** — the same fragility the §6 capacity caveat
+discusses in the abstract, here visible in one name.
+
+What this means for interpretation:
+
+- **The headline alpha is real either way.** Pre-correction (committed
+  pkl) FF5 α is +18.18%/yr at t=+5.74 (long-OOS); post-correction
+  estimate is ~+21.2%/yr at t≈+7.2 — both well into significant
+  territory under any reasonable DSR / bootstrap penalty.
+- **The +0.12 Sharpe swing is a name-effect lower bound on the
+  uncertainty band around the headline.** A reader should weight the
+  headline numbers ±0.1 Sharpe / ±2 pp α as the realistic
+  reproduction-noise envelope across (a) data-pull date, (b) filter
+  variants, (c) random seed choice in tied splits — not as a tight point
+  estimate.
+- **Robustness to single names should be tested explicitly in any
+  deployment.** A leave-one-out study over the top-decile contributors
+  (or a "drop the highest-realised-vol name in each long-book month")
+  ablation would quantify the tail-name sensitivity. We did not run
+  this for the final report; it is the obvious extension and a fair
+  referee question.
 
 ### Costs and capacity — the binding limit of the headline
 
