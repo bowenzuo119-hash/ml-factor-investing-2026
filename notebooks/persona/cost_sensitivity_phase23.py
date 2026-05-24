@@ -28,7 +28,16 @@ BPS_GRID = [10, 20, 30, 50, 75, 100]
 
 
 def main() -> int:
-    res = pickle.load(open(RESULT, "rb"))["XGBoost"]
+    import sys
+    from pathlib import Path
+    # optional arg: a result dir or per_model_results.pkl to cost-test (defaults
+    # to 23g). e.g. `... cost_sensitivity_phase23 results/24b_canonical_all_gkx`
+    result_path = RESULT
+    if len(sys.argv) > 1:
+        p = Path(sys.argv[1])
+        result_path = p / "per_model_results.pkl" if p.is_dir() else p
+    print(f"cost grid on: {result_path}")
+    res = pickle.load(open(result_path, "rb"))["XGBoost"]
     gross = res.gross_returns.dropna()
     net10 = res.portfolio_returns.dropna()
     idx = gross.index.intersection(net10.index)

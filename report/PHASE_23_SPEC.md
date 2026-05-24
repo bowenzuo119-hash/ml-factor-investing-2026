@@ -1,5 +1,13 @@
 # Phase 23 — Broader-Universe Canonical (Sharadar rebuild)
 
+> **⚠️ COMPLETED + SUPERSEDED.** This was the engineering spec for the
+> Phase 23 broad-universe rebuild on 2026-05-23. All planned items shipped:
+> Phase 23a Optuna retune, Phase 23b k-sweep, Phase 23g canonical, Phase 25
+> statistical robustness. The FINAL canonical is now **Phase 24-RT** (a
+> chmom-extended successor to Phase 23g) — see DECISIONS.md 2026-05-24 and
+> REPORT.md §5 for current numbers. This spec is retained as the design
+> document.
+
 *Person B's spec for the post-PIT-audit rebuild. Person A (Bowen) owns
 the data engineering; Person B (Nicolas) owns the modeling and analysis.
 Created 2026-05-23; first draft.*

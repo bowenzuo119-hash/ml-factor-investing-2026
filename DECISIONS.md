@@ -857,7 +857,7 @@ The HML loading remains a real feature exposure — the model is partly betting 
 
 ## 2026-05-23 — Engine v0.5.0: separate training vs trading PIT filter
 
-**Context:** With the v0.4.0 point-in-time filter applied to *both* training labels and trading, the honest Phase 15 Sharpe is expected to drop from the survivorship-biased +1.49. Person B wants to attribute the drop: is it the *training-data* restriction (model learns from fewer stocks) or the *trading-universe* restriction (can only hold index members)? `eligible_universe_fn` applied to both at once, so the two couldn't be separated.
+**Context:** With the v0.4.0 point-in-time filter applied to *both* training labels and trading, the Phase 15 Sharpe collapsed from the survivorship-biased Phase 14 number (+1.49) to −0.31. (Correction: the +1.49 leaky headline lived in Phase 14 `14_official_canonical_k5`, not Phase 15; Phase 15 is the SAME panel with PIT applied — i.e. the leak-removal collapse itself.) Person B wants to attribute the drop: is it the *training-data* restriction (model learns from fewer stocks) or the *trading-universe* restriction (can only hold index members)? `eligible_universe_fn` applied to both at once, so the two couldn't be separated.
 
 **Decision:** Add `apply_pit_to_training: bool = True`. Default True = v0.4.0 behaviour (PIT on both, reproduces bit-identically). Set False with an `eligible_universe_fn` supplied → train on the full panel but trade only PIT members, isolating the trading restriction. Chose the boolean flag over a second `eligible_universe_train_fn` kwarg: B's diagnostic only needs full-vs-PIT on training, not an independent third universe, so the flag is the smaller API surface (YAGNI).
 
@@ -887,9 +887,9 @@ The HML loading remains a real feature exposure — the model is partly betting 
 
 | Phase | Test Sh | Long-OOS Sh | Description |
 |---|---|---|---|
-| Phase 15 original | +1.011 | +1.495 | UNKNOWN-bucket bug + no PIT (survivorship-biased — wrong) |
-| Phase 15 + fix 2 only | +1.383 | +1.225 | Sector unified, no PIT (still survivorship-biased) |
-| Phase 15 full PIT | -0.295 | -0.309 | Strict PIT + fixes (collapsed) |
+| Phase 14 (orig leaky) | +1.011 | +1.495 | UNKNOWN-bucket bug + no PIT (survivorship-biased — INVALID, withdrawn) |
+| Phase 14 + fix 2 only | +1.383 | +1.225 | Sector unified, no PIT (still survivorship-biased) |
+| Phase 15 (PIT applied) | -0.295 | -0.309 | Same S&P universe + strict PIT — exposes magnitude of leak |
 | Phase 17 (train full / trade PIT) | -0.280 | -0.113 | Confirmed not training-data issue |
 | **Phase 22 (relaxed PIT + retune)** | **+0.185** | **+0.313** | Honest with current data |
 
@@ -897,7 +897,7 @@ The HML loading remains a real feature exposure — the model is partly betting 
 
 **Decision:** Phase 22 is the honest canonical FOR CURRENT DATA. We will document this transparently in the report's §6 limitations. The broader-universe rebuild on Sharadar (see next entry) is the path to genuine alpha if it exists.
 
-**Reasoning:** Reporting Phase 15 original's +1.5 Sharpe would be intellectually dishonest given the survivorship leak (TSLA pre-2020 etc., quantified in PIT_INVESTIGATION_REPORT.pdf). Phase 22 is the most-careful version of "what does this strategy actually deliver on S&P 500."
+**Reasoning:** Reporting Phase 14's +1.5 Sharpe would be intellectually dishonest given the survivorship leak (TSLA pre-2020 etc., quantified in PIT_INVESTIGATION_REPORT.pdf). Phase 22 is the most-careful version of "what does this strategy actually deliver on S&P 500."
 
 **Revisit if:** the broader-universe rebuild (Phase 23, planned via Sharadar) produces a significant FF5 alpha — then Phase 23 becomes canonical and Phase 22 is the "S&P-500-only sensitivity check."
 
@@ -982,6 +982,49 @@ So ~55-60% of the realised return is market beta; ~40-45% is the real factor-adj
 - (c) Decomposed transparently — readers see how much of the Sharpe is market beta vs alpha
 
 **Revisit if:** the regime overlay re-run on Phase 23g materially improves Sharpe (Person C's overlay), or if the AR-vs-MR sensitivity check exposes look-ahead in the SF1 fundamentals.
+
+
+## 2026-05-24 — Phase 24-RT: FINAL FINAL CANONICAL — broad universe + chmom + retune (supersedes 23g)
+
+**Context:** After Phase 23g locked, we tested whether adding GKX top-5 features (chmom, maxret, mom36m) could push the canonical higher. Three new phases:
+
+* Phase 24a: Optuna retune of XGBoost on 14-feature Q-filtered panel (chmom added). Val R² = +0.005450 (+18% over Phase 23d's 13-feature retune).
+* Phase 24 / Phase 24-RT: walk-forward backtest with retuned XGBoost + 14 features.
+* Phase 24b: 16-feature variant adding maxret + mom36m + another retune. Val R² actually LOWER (+0.0046).
+* Phase 24c: k-sweep on Phase 24-RT predictions, confirms k=20 stays optimal.
+
+**Three-way A/B (XGBoost, full-OOS Sharpe / FF5 alpha t-stat / Mkt-β):**
+
+| Phase | Features | XGBoost tune | Full-OOS Sh | α t (full) | Mkt-β |
+|---|---|---|---|---|---|
+| Phase 23g | 13 | Phase 23a | +1.054 | +5.52 | +1.42 |
+| **Phase 24-RT** | **14 (+chmom)** | **Phase 24a** | **+1.082** | **+6.00** | **+1.27** |
+| Phase 24b | 16 (+chmom+maxret+mom36m) | Phase 24b | +0.981 | +4.74 | +1.41 |
+
+**Decision:** Phase 24-RT is the FINAL CANONICAL, supersedes Phase 23g.
+
+**Reasoning:**
+1. **chmom alone (Phase 24-RT) is the winner.** Strict improvement over Phase 23g on every metric: +0.03 Sharpe, +0.48 α t-stat, −0.15 Mkt-β (closer to neutral), −0.3 pp max DD.
+2. **More is not better (Phase 24b proves it).** Adding maxret + mom36m on top of chmom HURT the model despite retuning. Hyperparameter search space gets harder; feature signals are not orthogonal enough to justify the added complexity. Confirms Bowen's independent finding ("16 features hurt with the orig tune"); also confirms ours ("16 features hurt with the proper retune"). chmom is a sweet spot.
+3. **k=20 stays optimal** under Phase 24-RT (sweep ran k ∈ {1, 2, 3, 5, 7, 10, 15, 20, 30, 50}; k=20 has highest test Sharpe AND highest α t-stat AND lower Mkt-β than smaller k).
+4. **Independent audit by Person A** reproduced Phase 23g headline +1.05 with own FF5 + Newey-West; Phase 24-RT is the same audit pattern modestly improved.
+
+**Long-leg vs short-leg decomposition** (sanity check on the +5,222% gross cumulative): the strategy is essentially **long-leg dominated**. Long leg makes +37.85%/yr alone (Sharpe +1.16); short leg makes −2.0%/yr (Sharpe −0.47). The short leg acts as a market-neutralizing hedge with near-zero direct P&L — the alpha lives in long-side stock picking. Important framing for the report: this is NOT a symmetric L/S stock-picker, it's "long high-conviction stocks + token short hedge with significant cross-sectional alpha."
+
+**Cost sensitivity** (from Bowen's independent grid on Phase 23g, expected similar on 24-RT): α stays significant (t>2) up to ~50 bps/side; dies ~75 bps. At 30 bps per side (more conservative than the canonical 10 bps, justified by the small-cap tilt + 175% monthly turnover): Sharpe ~0.94, FF5 α +13.5%/yr (t≈4.3). 30 bps is the headline number for the report.
+
+**Honest framing for the report** (NOT "market-neutral"):
+- Strategy realizes high-beta directional exposure (Mkt-β ≈ +1.3) emerging from systematic long-small-cap-high-beta vs short-large-cap-low-beta picks.
+- Combined with the long-leg dominance, the most accurate one-line description is: **"high-beta directional long-short book with significant cross-sectional alpha after Fama-French adjustment."**
+- The +34%/yr ann return decomposes (long-OOS):
+  - +19%/yr from market beta (β=+1.42 × 13.5% Mkt-RF premium)
+  - +18%/yr pure FF5 alpha (the real cross-sectional skill, t=+5.74)
+  - Residual from SMB/HML/RMW/CMA exposures
+- Drawdown: −34.0% max DD across all windows. The COVID Feb-Mar 2020 crash drives this — fast crashes outpace monthly regime detection (see Person A's overlay diagnostic).
+
+**Trial-Sharpe list for DSR adjustment:** Phase 24-RT is the 13th canonical-model trial. DSR is conservative under 10 trials; with 13 trials the penalty grows but the α t-stat of +6.00 (p < 1e-9) clears any reasonable threshold.
+
+**Revisit if:** out-of-sample year 2025+ breaks the pattern, or if a future Person C regime model with sub-monthly frequency catches the COVID drawdown that the current monthly HMM missed.
 
 
 ## Upcoming decisions to log
