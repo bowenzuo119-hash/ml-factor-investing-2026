@@ -26,12 +26,14 @@ Evaluated under a strict walk-forward backtest (Person A's PIT-correct
 `run_walk_forward_backtest` engine v0.5.0, 10 bps/side transaction costs,
 120-month sliding training window), the canonical XGBoost strategy earns
 a net Sharpe of **+1.08 (full-OOS 2012–2024) / +0.98 (long-OOS 2015–2024) /
-+1.06 (test-only 2019–2024)** at 10 bps/side, or **~+0.90 / +13.5%/yr FF5
-alpha (t≈4.3)** under a more conservative 30 bps/side assumption (justified by
-the strategy's small-cap tilt and 175% monthly turnover). The
-**Fama-French 5-factor alpha is +18.2%/yr at t=+5.74 (p&lt;0.001)** on the
-long-OOS window and significant on every reporting window — the first time in
-the project we have statistically significant alpha after factor adjustment.
++1.06 (test-only 2019–2024)** at 10 bps/side, or **+0.91 / +12.10%/yr FF5
+alpha (t=+4.39)** under a more conservative 30 bps/side assumption (justified
+by the strategy's small-cap tilt and 175% monthly turnover; α stays
+statistically significant up to ~50 bps/side per Person A's cost-sensitivity
+grid). The **Fama-French 5-factor alpha is +18.2%/yr at t=+5.74 (p&lt;0.001)**
+on the long-OOS window and significant on every reporting window — the first
+time in the project we have statistically significant alpha after factor
+adjustment.
 
 We are explicit about the residual concerns. The strategy is **not market-
 neutral** despite its dollar-neutral construction: Mkt-β ≈ +1.3 (longs are
@@ -217,11 +219,15 @@ See `results/24_canonical_with_chmom/` and `results/final_canonical_plots/`.
 
 ### Conservative cost basis (30 bps/side, justified by small-cap tilt + 175% turnover)
 
-| Window | Sharpe (30bps) | Ann return | FF5 α (30bps) | α t-stat |
-|---|---|---|---|---|
-| Long-OOS 2015–2024 | **~+0.90** | ~+27% | **~+13.5%/yr** | **~+4.3** ✓✓ |
+Per Bowen's `cost_sensitivity_phase23.py` rerun on the Phase 24-RT artefact:
 
-*[TODO: pull exact numbers from Bowen's `cost_sensitivity_phase24.py` rerun]*
+| Cost basis | Sharpe | FF5 α/yr | α t-stat |
+|---|---|---|---|
+| 10 bps/side (headline) | +1.05 | +16.40% | +5.95 ✓✓✓ |
+| **30 bps/side (conservative)** | **+0.91** | **+12.10%/yr** | **+4.39** ✓✓ |
+| 50 bps/side (stress) | ~+0.55 | ~+8% | +2.82 ✓ |
+
+α stays statistically significant (t>2) up to ~50 bps/side; dies around 75 bps. 30 bps is the recommended report headline given the strategy's small-cap tilt and 175% monthly turnover.
 
 ### Honest characterisation — NOT market-neutral
 
