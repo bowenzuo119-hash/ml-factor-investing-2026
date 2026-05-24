@@ -135,7 +135,10 @@ try:
 except FileNotFoundError:
     sys.exit(f"ERROR: '{INPUT_FEATURES}' not found. Run week1_regime_data.py first.")
 
-df[FEATURE_COLS] = df[FEATURE_COLS].ffill().bfill()
+# Forward-fill only -- backward-fill would leak future observations into
+# earlier months (look-ahead bias). The walk-forward loop below would
+# otherwise see future-derived training data.
+df[FEATURE_COLS] = df[FEATURE_COLS].ffill()
 
 print(f"  âœ“ Features loaded: {len(df)} months | "
       f"{df.index[0].strftime('%Y-%m')} â†’ {df.index[-1].strftime('%Y-%m')}")
