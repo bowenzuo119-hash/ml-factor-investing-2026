@@ -259,50 +259,53 @@ and `results/final_canonical_plots/`.
 
 ### Final canonical (Phase 24-RT) — XGBoost @ 10 bps/side, both bugs corrected
 
-The full-OOS headline below comes from Bowen's
-`notebooks/persona/canonical_qfix_validate.py` (same Phase 24-RT recipe,
-14 features, corrected Q-filter) run on Bowen's machine — authoritative
-because the corrected `is_bankruptcy_ticker` requires
-`data/raw/sharadar/tickers.parquet` which lives only there.
-
-The previously-committed `24_canonical_with_chmom.py` pkl had **two
-silent bugs** (both shipped before this report locked) that are now
-both fixed:
-
-1. **Buggy Q-filter** (symbol-only `endswith("Q")`, wrongly dropped
-   NDAQ and IONQ). Fix: `is_bankruptcy_ticker` gated on
-   `SHARADAR.tickers.isdelisted == 'Y'`.
-2. **Missing INCLUDE_FEATURES subset** — the driver read the features
-   parquet but never restricted to its declared 14-feature list, so
-   when Bowen added `maxret` and `mom36m` to that parquet for the
-   Phase 24b test, the committed pkl silently became the 16-feature
-   variant (which the Phase 24-RT vs Phase 24b A/B had separately shown
-   to be *worse*: Sharpe ~+0.97 vs the legit 14-feature canonical's
-   ~+1.15). Fix: explicit `features = features[list(INCLUDE_FEATURES) + ["sector"]]`
-   subset in the driver. See DECISIONS.md 2026-05-24 "INCLUDE_FEATURES bug".
-
-Bowen is re-freezing the canonical pkl with both fixes applied. The
-per-window numbers below are the authoritative full-OOS from the
-qfix-validate, and **delta-shifted estimates** on long-OOS and test-OOS
-windows until the re-freeze lands.
+The numbers below come from the authoritative re-frozen pkl in
+`results/24_canonical_with_chmom/per_model_results.pkl` (corrected
+Q-filter via `is_bankruptcy_ticker` + INCLUDE_FEATURES subset applied;
+both fixes are described below). They match Bowen's
+`notebooks/persona/canonical_qfix_validate.py` two-arm ablation
+exactly. Source: walk-forward output of the canonical driver on
+Bowen's data lane.
 
 | Window | Sharpe | Ann return | Max DD | **FF5 alpha** | **t-stat** | **p-value** | Mkt-β |
 |---|---|---|---|---|---|---|---|
-| **Full-OOS 2012–2024 (authoritative)** | **+1.15** | ~+36% | ~−34% | **+18.7%/yr** | **+6.85** | **<0.001 ✓✓✓** | +1.27 |
-| Long-OOS 2015–2024 (delta-shifted) | ~+1.10 | ~+35% | ~−34% | ~+21.2%/yr | ~+7.2 | <0.001 ✓✓✓ | +1.30 |
-| Test 2019–2024 (delta-shifted) | ~+1.18 | ~+44% | ~−34% | ~+24.9%/yr | ~+6.8 | <0.001 ✓✓✓ | +1.37 |
+| **Full-OOS 2012–2024** | **+1.15** | +34.7% | −33.8% | **+18.73%/yr** | **+6.85** | **<0.001 ✓✓✓** | +1.29 |
+| Long-OOS 2015–2024 | +0.97 | +31.9% | −33.8% | +19.10%/yr | +6.00 | <0.001 ✓✓✓ | +1.33 |
+| Test 2019–2024 | +1.00 | +39.4% | −33.8% | +21.17%/yr | +5.00 | <0.001 ✓✓✓ | +1.40 |
 
-For reference, the **double-buggy committed pkl** (both Q-filter and
-INCLUDE_FEATURES bugs simultaneously active) reported: full-OOS Sharpe
-+1.08, α +17.51%/yr (t=+6.00); long-OOS Sharpe +0.98, α +18.18%/yr
-(t=+5.74); test-OOS Sharpe +1.06, α +21.91%/yr (t=+5.32). These were
-the numbers in the previous version of this report and remain audit-trail
-visible in the project's commit history. The two bugs partially
-cancelled (Q-filter dropped legitimate names → lowered Sharpe;
-INCLUDE_FEATURES bug forced 16-feature run → lowered Sharpe), so the
-double-buggy pkl read close to the corrected pkl but for the wrong
-reasons. Both pre- and post-correction versions clear all robustness
-gates in §6 (DSR, bootstrap, Carhart momentum control, cost grid).
+Where the q-fix benefit accrued: **all of it lands in the 2012–2014
+portion of the full-OOS window**. The 2015-onwards long-OOS Sharpe
+(+0.97) is essentially unchanged from the pre-correction value (+0.98)
+and the 2019-onwards test-OOS Sharpe is slightly LOWER (+1.00 vs the
+previously-reported +1.06) — so the qualitative picture for the
+out-of-sample period most readers care about does not shift. What
+changed is that the full-OOS Sharpe properly reflects ~13 years of
+honest data instead of being depressed by the partial-cancellation of
+the two bugs in earlier years.
+
+The previously-committed `24_canonical_with_chmom.py` pkl had **two
+silent bugs** (both now fixed):
+
+1. **Buggy Q-filter** (symbol-only `endswith("Q")`, wrongly dropped
+   NDAQ and IONQ). Fix: `is_bankruptcy_ticker` gated on
+   `SHARADAR.tickers.isdelisted == 'Y'` (Bowen, commit `fd9111a`).
+2. **Missing INCLUDE_FEATURES subset** — the driver read the features
+   parquet but never restricted to its declared 14-feature list, so
+   when `maxret` and `mom36m` were added to the same parquet for a
+   Phase 24b test, the committed pkl silently became the 16-feature
+   variant (which the 24-RT vs 24b A/B had separately shown to be
+   *worse*). Fix: explicit
+   `features = features[list(INCLUDE_FEATURES) + ["sector"]]` subset
+   in the driver (Bowen, commit `9bd545a`). See DECISIONS.md 2026-05-24
+   "INCLUDE_FEATURES bug".
+
+The two bugs partially cancelled in the previously-committed pkl
+(Q-filter dropped legitimate names → lowered Sharpe; INCLUDE_FEATURES
+bug forced 16-feature run → lowered Sharpe), so the double-buggy pkl
+reported full-OOS Sharpe +1.08 and long-OOS Sharpe +0.98 — close to the
+corrected numbers but for the wrong reasons. Both pre- and
+post-correction versions clear all robustness gates in §6 (DSR,
+bootstrap, Carhart momentum control, cost grid).
 
 ### Conservative cost basis (30 bps/side, justified by small-cap tilt + 175% turnover)
 
@@ -492,12 +495,8 @@ down-cap name-fragility** — the same fragility the §6 capacity caveat
 discusses in the abstract, here visible in one name.
 
 To close the loop, we ran a **single-name leave-one-out study**
-(Phase 26: `notebooks/personb/26_name_concentration_ablation.py`).
-The numbers below are from the previously-committed (double-buggy)
-pkl and will be refreshed once Bowen's corrected re-freeze lands;
-the qualitative finding (top-1 name moves Sharpe by ~0.05–0.10) is
-robust to the bug correction, since the LSCG name itself is on a
-broad-universe Sharadar panel that both pre- and post-fix pkls share.
+(Phase 26: `notebooks/personb/26_name_concentration_ablation.py`)
+on the **corrected** 14-feature pkl.
 The procedure post-processes the canonical's weight matrix: for each of
 the top-10 names by lifetime |P&L|, drop it from the long/short books
 entirely, renormalise each leg, recompute net returns with the engine's
@@ -505,14 +504,17 @@ entirely, renormalise each leg, recompute net returns with the engine's
 
 | Dropped name | Lifetime P&L (%) | Months active | Δ Sharpe |
 |---|---|---|---|
-| LSCG | +29.7% | 89 | **+0.087** |
-| APLD | +13.7% | 133 | −0.036 |
-| PTIX | +12.1% | 99 | −0.036 |
-| FTBK | +10.1% | 30 | −0.017 |
+| LSCG | +32.6% | 91 | **+0.089** |
+| PTIX | +12.2% | 115 | −0.035 |
+| FTBK | +11.1% | 29 | −0.020 |
+| APLD | +9.7% | 145 | −0.029 |
 
 The headline number: **dropping the single largest-P&L name (LSCG) shifts
-the Sharpe by +0.087** — *larger* than IONQ's +0.042 and ~75% of the
-full Q-fix swing of +0.116. Two reads:
+the Sharpe by +0.089** — *larger* than IONQ's +0.042 and ~77% of the
+full Q-fix swing of +0.116. The LSCG result reproduces (Δ = +0.087 on
+the previously-committed buggy-filter pkl, +0.089 on the corrected pkl),
+confirming it is a robust feature of the strategy's name selection, not
+a bug-driven artefact. Two reads:
 
 - (i) Single-name fragility is real and slightly worse than the
   IONQ-only datapoint suggested. The ±0.05 reproduction-noise envelope
@@ -610,22 +612,24 @@ inside the window.
 
 ### Statistical robustness — Deflated Sharpe Ratio (BLdP 2014)
 
-Re-running Phase 25's robustness battery against the Phase 24-RT canonical
-(`results/25_statistical_robustness_broad/summary.json`) with the trial count
-bumped from N=10 to **N=25** (counting every configuration evaluated on the
-same long-OOS window across the 23a-24b lineage, not just the headline phases):
+Re-running Phase 25's robustness battery against the **corrected** Phase 24-RT
+canonical (`results/25_statistical_robustness_broad/summary.json`) with the
+trial count bumped from N=10 to **N=25** (counting every configuration
+evaluated on the same long-OOS window across the 23a-24b lineage, not just
+the headline phases):
 
-| Window | Sharpe | Block-bootstrap 5–95% CI | P(SR ≤ 0) | **DSR (N=25)** |
+| Window | Sharpe (Phase 25 conv.) | Block-bootstrap 5–95% CI | P(SR ≤ 0) | **DSR (N=25)** |
 |---|---|---|---|---|
-| Test 2019–2024 (n=72) | +1.06 | [+0.48, +1.60] | 0.0016 | **0.868** |
-| Long-OOS 2015–2024 (n=120) | +0.98 | [+0.54, +1.44] | 0.0003 | **0.868** |
+| Test 2019–2024 (n=72) | +1.03 | [+0.46, +1.57] | 0.0021 | **0.846** |
+| Long-OOS 2015–2024 (n=120) | +1.00 | [+0.56, +1.47] | 0.0002 | **0.879** |
 
 Both bootstrap intervals exclude zero comfortably, and the deflated Sharpe of
-0.87 means: **even after penalising for 25 trials, there is an ~87% posterior
-probability that the true Sharpe exceeds the maximum we would expect under
-the null from running 25 unrelated configurations.** The DSR is materially
-lower than the headline Sharpe because the BLdP penalty grows with √(2 ln N),
-but the result remains comfortably above the conventional 0.5 cut-off.
+**~0.85–0.88** means: **even after penalising for 25 trials, there is an
+~85–88% posterior probability that the true Sharpe exceeds the maximum we
+would expect under the null from running 25 unrelated configurations.** The
+DSR is materially lower than the headline Sharpe because the BLdP penalty
+grows with √(2 ln N), but the result remains comfortably above the
+conventional 0.5 cut-off.
 
 ### IC vs. Sharpe — small per-name edge, broad diversification
 
