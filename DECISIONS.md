@@ -897,7 +897,7 @@ The HML loading remains a real feature exposure — the model is partly betting 
 
 **Decision:** Phase 22 is the honest canonical FOR CURRENT DATA. We will document this transparently in the report's §6 limitations. The broader-universe rebuild on Sharadar (see next entry) is the path to genuine alpha if it exists.
 
-**Reasoning:** Reporting Phase 15 original's +1.5 Sharpe would be intellectually dishonest given the survivorship leak (TSLA pre-2020 etc., quantified in PIT_INVESTIGATION_REPORT.pdf). Phase 22 is the most-careful version of "what does this strategy actually deliver on S&P 500."
+**Reasoning:** Reporting Phase 14's +1.5 Sharpe would be intellectually dishonest given the survivorship leak (TSLA pre-2020 etc., quantified in PIT_INVESTIGATION_REPORT.pdf). Phase 22 is the most-careful version of "what does this strategy actually deliver on S&P 500."
 
 **Revisit if:** the broader-universe rebuild (Phase 23, planned via Sharadar) produces a significant FF5 alpha — then Phase 23 becomes canonical and Phase 22 is the "S&P-500-only sensitivity check."
 
