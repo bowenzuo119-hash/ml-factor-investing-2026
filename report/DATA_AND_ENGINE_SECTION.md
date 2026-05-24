@@ -151,7 +151,8 @@ disk.
 The engine is the single integration seam between the three workstreams
 (DECISIONS 2026-05-11): it takes a duck-typed model (`fit`/`predict`), an
 optional regime function, and an optional sector map, and returns a frozen
-`BacktestResult`. The interface is versioned (`INTERFACE_VERSION = 0.3.0`).
+`BacktestResult`. The interface is versioned (`INTERFACE_VERSION = 0.5.0`,
+having advanced 0.3.0 → 0.4.0 → 0.5.0 across the PIT-audit corrections below).
 
 Time is partitioned into contiguous **test blocks** of length `test_window`,
 each preceded by an expanding-origin sliding **train window** of length
