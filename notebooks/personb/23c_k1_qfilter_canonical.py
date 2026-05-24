@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from src.data_loader import is_bankruptcy_ticker
 from src.metrics import summary_stats, information_coefficient
 
 
@@ -57,22 +58,6 @@ COST_BPS = 10.0
 MODELS = ("Lasso", "XGBoost", "NN")
 
 
-def is_q_suffix_bankruptcy(ticker: str) -> bool:
-    """Sharadar's bankruptcy convention: ticker ends in 'Q'.
-
-    Examples: INTEQ (Intercept), LKSDQ (Lakeshore), FREDQ (Fred's),
-    LEHMQ (Lehman), ENRNQ (Enron), WCOEQ (WorldCom), SIVBQ (SVB after
-    March 2023 collapse). These are 'in proceedings' tickers not
-    actually tradable.
-
-    Excludes legit common tickers ending in Q: SQ (Block), Q (Quidel),
-    BBBYQ etc. by length: bankruptcy tickers are 4-5 chars total, the
-    'Q' suffix is appended to a base 3-4 char ticker.
-    """
-    t = str(ticker).upper().strip()
-    return len(t) >= 4 and t.endswith("Q")
-
-
 def build_portfolio_returns(preds: pd.Series, returns_wide: pd.DataFrame,
                             sector_map: dict[str, str], k: int = 1,
                             cost_bps: float = COST_BPS,
@@ -95,7 +80,7 @@ def build_portfolio_returns(preds: pd.Series, returns_wide: pd.DataFrame,
         }, index=cs.index).dropna(subset=["score"])
         before = len(cs_df)
         if q_filter:
-            cs_df = cs_df[~cs_df.index.map(is_q_suffix_bankruptcy)]
+            cs_df = cs_df[~cs_df.index.map(is_bankruptcy_ticker)]
         q_dropped_per_rebal.append(before - len(cs_df))
 
         longs, shorts = [], []
@@ -175,7 +160,7 @@ def main() -> int:
     print(f"  returns: {returns_wide.shape}")
     print(f"  sector_map: {len(sector_map)} tickers")
     n_q = sum(1 for t in preds_wide.index.get_level_values("ticker").unique()
-              if is_q_suffix_bankruptcy(t))
+              if is_bankruptcy_ticker(t))
     print(f"  Q-suffix bankrupt tickers in predictions universe: {n_q}")
 
     rows = []

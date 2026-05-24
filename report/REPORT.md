@@ -11,8 +11,11 @@
 ## Abstract
 
 We build a monthly-rebalanced long–short equity ML strategy on a broad US
-universe (top-2,000 US common stocks by market cap, survivorship-free via
-SHARADAR/TICKERS), following the machine-learning asset-pricing approach of
+universe — the **survivorship-free alive set of the rolling top-2,000 US
+common stocks by market cap, ~4,400 names/month median** (broad because it
+includes every name that *was* in the top-2,000 at any prior month-end and is
+still trading on the rebalance date, via SHARADAR/TICKERS) — following the
+machine-learning asset-pricing approach of
 Gu, Kelly &amp; Xiu (2020). A gradient-boosted model (XGBoost) forecasts the
 cross-section of next-month returns from **14 firm features** spanning price
 trend, liquidity, volatility, GKX momentum-acceleration, and Fama-French
@@ -153,9 +156,14 @@ broad panel passes **3/3** (random Sharpe +0.01, oracle +153.8, uniform 0 bps).
 
 > **Full detail: [`report/ALPHA_MODEL_SECTION.md`](ALPHA_MODEL_SECTION.md).**
 
-Monthly panel of US common stocks 2002–2024, **broad universe (~2,000 names
-per rebalance, top-by-market-cap, PIT-correct via §2's universe filter,
-5,897 unique tickers across the sample)**. **14 features:**
+Monthly panel of US common stocks 2002–2024, **broad survivorship-free
+universe (~4,400 names/month median — the alive set of historical top-2,000
+constituents, PIT-correct via §2's universe filter, 5,897 unique tickers
+across the sample)**. The universe is broader than a literal "rolling top-2,000"
+because it carries forward every name that was top-2,000 at any prior
+month-end and is still trading on the rebalance date — this is what makes it
+survivorship-free, and it is also where the alpha concentrates (see §5).
+**14 features:**
 - **Price-trend (5):** momentum (12-1), short-term reversal,
   return volatility (12m), idiosyncratic volatility (CAPM-residual 12m),
   and **GKX `chmom` — change in 6-month momentum** (rank #4 in the
@@ -239,11 +247,12 @@ index-volatility regime detection underweights.
 
 ## 5. Integrated Results
 
-The **final honest canonical** is XGBoost on the broad US equity universe
-(~2000 names per date, top by market cap, PIT survivorship-free) with
-sector-neutral construction (k=20 per GICS sector), bankrupt-ticker filter,
-and **14 features** (13 GKX-style price/value/quality + GKX `chmom`).
-See `results/24_canonical_with_chmom/` and `results/final_canonical_plots/`.
+The **final honest canonical** is XGBoost on the **broad survivorship-free US
+equity universe (~4,400 names/month median, the alive set of historical
+top-2,000 constituents, PIT-correct via §2)** with sector-neutral construction
+(k=20 per GICS sector), bankrupt-ticker filter, and **14 features** (13
+GKX-style price/value/quality + GKX `chmom`). See `results/24_canonical_with_chmom/`
+and `results/final_canonical_plots/`.
 
 ### Final canonical (Phase 24-RT) — XGBoost @ 10 bps/side
 
@@ -279,6 +288,37 @@ The strategy realizes a **high-beta directional long-short book** with significa
 - Residual from SMB/HML/RMW/CMA factor loadings
 
 So ~55% of the headline return comes from market exposure; **~45% is genuine ML cross-sectional skill that survives Fama-French adjustment at t > 5 across every reporting window.**
+
+### Where the alpha lives — down-cap concentration (GKX-style finding)
+
+The headline +18.2%/yr alpha lives in the **down-cap tail** of our broad
+survivorship-free universe — exactly the prediction Gu-Kelly-Xiu (2020)
+make about cross-sectional ML strategies. We tested this directly by
+re-running the canonical Phase 24-RT recipe on a strict **rolling top-2,000
+by market cap** sub-universe (i.e. dropping the historical-top-2,000 alive
+set and keeping only the current top-2,000 each month — the larger-cap end
+of our panel). Source: [`notebooks/persona/canonical_true_top2000.py`](../notebooks/persona/canonical_true_top2000.py).
+
+| Universe | Median names / month | FF5 α/yr | α t-stat | Mkt-β | SMB β |
+|---|---|---|---|---|---|
+| **Broad survivorship-free** (canonical) | ~4,400 | **+18.18%** | **+5.74** | +1.30 | +1.26 |
+| **Strict rolling top-2,000** (down-cap removed) | ~2,000 | +1.80% | +0.96 | +0.28 | +0.15 |
+
+The alpha collapses by ~10× and loses statistical significance once the
+small/mid-cap tail is removed — and so does the SMB loading (+1.26 → +0.15),
+confirming the down-cap concentration is real, not a spurious factor mismatch.
+**This is the central honest finding of the project:** ML cross-sectional
+factor strategies have alpha on broad survivorship-free US universes, and
+that alpha is concentrated in names below the current top-2,000 by market
+cap — consistent with GKX 2020's CRSP-3,000-to-6,000-name sample. On the
+narrow large-cap end alone, the same model and features produce no
+significant factor-adjusted alpha.
+
+This frames the project's contribution honestly: we are not claiming ML
+factor alpha on the megacap S&P-500; we are confirming the academic finding
+that the alpha lives where most institutional money does not trade
+(small/mid-cap, where capacity and transaction costs are the binding
+constraints — see §6).
 
 ### Momentum control — is the alpha just the momentum premium?
 
@@ -371,15 +411,59 @@ cross-sectional dispersion for an ML model to exploit. Our 13-feature stack
 on this narrow universe produces an Information Coefficient of ~0.006 and no
 significant FF5 alpha.
 
-### Broader-universe rebuild in progress (Phase 23)
+### Costs and capacity — the binding limit of the headline
 
-To test whether ML alpha is recoverable on a broader universe, we are
-rebuilding the pipeline on Bowen's premium Sharadar subscription (SF1 +
+The §5 decomposition showed the +18.2%/yr alpha lives **below the rolling
+top-2,000 by market cap** — i.e. in the small/mid-cap tail of our
+survivorship-free universe. This is the project's central honest finding,
+and it is also the **principal practical limit** on the headline. Two
+specific concerns the reader should weight against the +5.7 t-stat:
+
+- **10 bps/side is optimistic for the down-cap tail.** Our cost grid
+  charges a flat 10 bps/side on L1 turnover (Phase 24-RT canonical) and
+  shows α remains significant at 30 bps/side (+12.10%/yr at t=+4.39),
+  significant up to ~50 bps/side (t=+2.82), and dies around 75 bps/side.
+  That grid is honest under a flat-cost assumption, but **realistic
+  small-cap costs are not flat**: bid-ask spreads + market impact on
+  $500M–$2B mcap names can exceed 30 bps/side on routine trades and rise
+  sharply with order size. The 30 bps/side row is a reasonable midpoint;
+  the 50 bps/side row is a stress-test, not a worst-case. A strategy
+  realistically deployed at this scale would need to validate costs on
+  the specific subset of names it actually trades, ideally with broker
+  TCA on a paper-trading sample.
+- **Capacity scales with strategy AUM, not universe size.** At 175%
+  monthly turnover and ~440 positions per rebalance, the strategy needs
+  to enter and exit ~770% of NAV per month across small-cap names. Even
+  modest AUM (e.g. $100M) translates to ~$770M of monthly small-cap
+  notional throughput — well above what most names in the down-cap tail
+  can absorb without material impact. Concretely: the alpha lives where
+  institutional money does not trade because institutional money cannot
+  trade there at scale. This is the same finding GKX 2020 acknowledge in
+  their Section IV.D, and it is the reason small-/mid-cap factor
+  strategies in the literature typically report gross results without
+  realistic post-cost claims at deployable AUM.
+
+**Net read:** the +18%/yr alpha is real, statistically robust, and
+survives every factor adjustment we threw at it (FF3, FF5, FF5+UMD,
+Newey-West HAC). The question it cannot answer is whether the alpha is
+*deployable* — that depends on AUM-scaled execution costs we do not
+have the data to measure here. The conservative claim the report makes
+is therefore the academic one (cross-sectional ML alpha exists on a
+broad survivorship-free US equity universe) rather than the operational
+one ("we'd run this in size tomorrow"). A direct extension would
+re-run the cost grid with size-impact-aware Almgren-Chriss or Kissell
+models calibrated to the actual cap-bucket distribution of the long/short
+positions.
+
+### Broader-universe rebuild (Phase 23 — completed; superseded by Phase 24-RT)
+
+The pipeline was rebuilt on Bowen's premium Sharadar subscription (SF1 +
 DAILY + TICKERS + SP500 + ACTIONS — all included free in the existing
-subscription). The new universe will be ~2000-3000 US common stocks with
-mcap > $1B per rebalance (~Russell 1000-1500 equivalent). Subscription
-expires 2026-06-22 ("Will Not Renew") so the bulk data pull is happening
-this weekend.
+subscription). The new universe is the **survivorship-free alive set of
+historical top-2,000 constituents** (~4,400 names/month median),
+PIT-correct via `eligible_universe_fn`. Subscription expires 2026-06-22
+("Will Not Renew") so the bulk data pull happened on 2026-05-24, well
+inside the window.
 
 ### Statistical robustness — Deflated Sharpe Ratio (BLdP 2014)
 

@@ -1059,6 +1059,60 @@ V[SR] is kept on the original 8-trial recorded sample to avoid fabricating Sharp
 **Conclusion:** Phase 24-RT survives both rigor checks Bowen flagged. No model change required; canonical stays Phase 24-RT.
 
 
+## 2026-05-24 — Universe-label audit: "top-2,000" is wrong; canonical is the broad survivorship-free union (~4,400 names/month median)
+
+**Context:** Bowen ran an audit on what the Phase 24-RT canonical actually trades and discovered the report's universe description ("top 2,000 US common stocks by market cap") is inaccurate. The engine's eligibility filter (`load_universe_at`) returns every name that *was* in the rolling top-2,000 at any prior month-end and is still trading on the rebalance date — i.e. the survivorship-free union — rather than the strict rolling top-2,000 each month. Median monthly position-eligible count is ~4,400 names, not ~2,000.
+
+This is what makes the panel survivorship-free, and it is also what drives the +18%/yr FF5 alpha: the additional names beyond the current top-2,000 are predominantly small/mid-cap stocks that *used* to be in the top-2,000 (or rose toward it before delisting/falling out). To test where the alpha actually lives, Bowen re-ran the canonical recipe on a strict rolling top-2,000 sub-universe (`notebooks/persona/canonical_true_top2000.py`):
+
+| Universe | Median names/month | FF5 α/yr | α t-stat | Mkt-β | SMB β |
+|---|---|---|---|---|---|
+| Broad survivorship-free (canonical) | ~4,400 | +18.18% | +5.74 | +1.30 | +1.26 |
+| Strict rolling top-2,000 | ~2,000 | +1.80% | +0.96 | +0.28 | +0.15 |
+
+**Decision:** Keep the broad survivorship-free panel as the canonical (numbers don't change), but **rewrite the universe description** in the abstract, §3, §5, and §6 so the panel is honestly characterised. Frame the down-cap concentration as the central finding (GKX-style: ML cross-sectional alpha lives in the small/mid-cap tail) rather than as a caveat.
+
+**Reasoning:**
+1. The numbers are real, PIT-clean, survivorship-free, and reproducible — the only error is the *label*, not the result.
+2. A broad survivorship-free universe is the GKX-2020-standard choice; using it is methodologically *more* defensible than a strict rolling top-N would have been.
+3. The down-cap concentration is exactly the academic prediction (GKX 2020 §V, Avramov-Cheng-Metzker 2023). Confirming it on our independent rebuild is a positive contribution, not a negative caveat.
+4. The capacity/cost caveats follow directly: alpha in the down-cap tail is genuinely harder to harvest at deployable AUM. §6 documents this honestly.
+
+**Files changed:**
+- `report/REPORT.md` — abstract universe sentence, §3 universe sentence, §5 final-canonical caption, new §5 "Where the alpha lives" decomposition block (table + GKX framing), strengthened §6 "Costs and capacity" subsection.
+- Pending (Bowen): universe labels on `results/persona_figures/universe_*.png`, §2 universe paragraph relabel, top-2,000 decomposition note in §2.
+
+**Status:** Numbers locked, framing honest. Same shape of correction as the survivorship-leak relabel from 2026-05-23.
+
+
+## 2026-05-24 — Q-filter bug: `endswith("Q") AND len>=4` wrongly drops NDAQ and IONQ; gate on `isdelisted=="Y"` too
+
+**Context:** The bankrupt-ticker filter rule `len(t) >= 4 and t.endswith("Q")` was meant to drop SHARADAR's Q-suffix delisted bankruptcy filings (LEHMQ, ENRNQ, SIVBQ, INTEQ — terminal-price patterns that can manufacture spurious alpha). Bowen discovered it also drops **NDAQ (Nasdaq Inc.)** and **IONQ (IonQ Inc.)** — both alive common stock, neither bankrupt.
+
+The fix gates the rule on SHARADAR/TICKERS `isdelisted=="Y"`:
+
+```python
+def is_bankruptcy_ticker(t: str) -> bool:
+    t = str(t).upper().strip()
+    if len(t) < 4 or not t.endswith("Q"):
+        return False
+    return t in _delisted_set()  # SHARADAR tickers.isdelisted=='Y'
+```
+
+**Decision:** Bowen ships the corrected function in `src/data_loader.py`; all 10 callsites migrate to it (`src/factors.py`, `notebooks/personb/{23c,23d,23e,23g,24,24a,24b,24c}*.py`, `notebooks/persona/{out_of_time_test,regime_overlay_ablation_broad}.py`). Bowen re-runs Phase 24-RT canonical to verify the headline doesn't move (expect within ±0.02 Sharpe / ±0.5 t-stat; adding 2 alive large-caps to a ~4,400-name universe shouldn't shift the cross-section).
+
+**Reasoning:**
+1. The original rule was a fast heuristic that happened to work on Sharadar's convention (delisted bankruptcy tickers get a Q suffix), but a small handful of alive tickers also end in Q. Gating on `isdelisted=="Y"` makes the filter unambiguous.
+2. Re-running on Phase 24-RT verifies the bug didn't materially shape the result — if the headline moves >0.02 Sharpe, we discuss before locking.
+
+**Files changed (this entry):**
+- (Pending Bowen) `src/data_loader.py` — new `is_bankruptcy_ticker()` function.
+- (Pending Bowen) the 10 callsites listed above.
+- (Pending Bowen) Phase 24-RT canonical re-run + headline diff report.
+
+**Status:** Code change in flight; numbers expected to be within noise.
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
