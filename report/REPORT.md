@@ -46,21 +46,46 @@ factor exposure rather than uncorrelated skill.
 
 ## 2. Data and Infrastructure  *(Person A)*
 
-> **Full detail: [`report/DATA_AND_ENGINE_SECTION.md`](DATA_AND_ENGINE_SECTION.md).**
+The canonical pipeline runs entirely on **Sharadar** (Nasdaq Data Link) — one
+premium subscription covering six tables: **SF1** (fundamentals), **SEP**
+(prices), **DAILY** (market cap / valuation), **TICKERS** (security master),
+**SP500** (membership), **ACTIONS** (corporate actions). **SEP `closeadj`**
+(split- and dividend-adjusted daily close) is the single price source for
+2002–2024 — *no CRSP/yfinance splice* — and it carries **delisted names under
+their historical symbols** (LEHMQ → 2008-10, ENRNQ → 2004, SIVBQ → 2023), so the
+panel is survivorship-free by construction. Validated: Sharadar monthly returns
+correlate **1.0000** with yfinance on surviving large-caps, SEP prices match
+SF1's reported point-in-time price on delisted names (median |Δ| ≈ 0%), and
+`closeadj` does not jump across split dates. CRSP MSF and yfinance remain wired
+in `data_loader.py` as historical alternative price sources but are **not** on
+the canonical path.
 
-Six point-in-time sources feed the panel: **CRSP MSF** monthly total returns
-(1925–2022), spliced to **yfinance** for 2023–2025 (validated at 0.999999
-median return correlation on the overlap window); **Sharadar SF1** fundamentals
-for the value/quality factors (B/M from the as-reported quarterly dimension,
-E/P from trailing-twelve-month — a distinction caught by validation, not
-assumption); **yfinance daily** dollar volume for the liquidity factor;
-**FRED** macro series for the regime model; and **fja05680** point-in-time
-S&P 500 membership so the universe carries no survivorship bias. The
-**walk-forward backtest engine** refits on a sliding 120-month window at each
-test-block boundary, charges 10 bps per side on L1 turnover, supports a
-three-layer sector-neutral construction, and is gated by a Random/Oracle/Uniform
-sanity suite (Project Framework §4.6). Methodology figures:
-`results/persona_figures/`.
+**Broad investable universe.** At each month-end the universe is the **top
+2,000 US common stocks by market cap** *trading at that date* — eligible iff
+`firstpricedate ≤ asof ≤ lastpricedate` (a delisted name drops out only after
+its last price, never before — no look-ahead, no survivorship), common stock on
+a major exchange (TICKERS), with positive DAILY market cap. Rolling top-N avoids
+the inflation drift of a fixed dollar threshold; the 2002–2024 union is ~5,900
+distinct tickers. A **bankrupt-ticker filter** drops Sharadar's Q-suffix
+delisted symbols (`len(ticker) ≥ 4 and ticker.endswith("Q")`) — 1,114 names,
+clustering in 2008 and 2023 — so terminal bankruptcy-price dynamics cannot
+manufacture spurious alpha.
+
+![Investable universe over time — strict PIT vs broad vs total](../results/persona_figures/universe_coverage_broad.png)
+
+![Survivorship correction — strict PIT vs broad PIT vs leaky union](../results/persona_figures/universe_survivorship_comparison.png)
+
+![Bankrupt-ticker exclusion volume per year](../results/persona_figures/q_filter_exclusions.png)
+
+**Engine.** The walk-forward backtest refits on a sliding 120-month window at
+each test-block boundary (block-gated refit), enforces the point-in-time
+universe on both training and trading (`eligible_universe_fn`), charges 10 bps
+per side on L1 turnover, supports three-layer sector-neutral construction, and
+is gated by a Random/Oracle/Uniform sanity suite (Project Framework §4.6) — the
+broad panel passes **3/3** (random Sharpe +0.01, oracle +153.8, uniform 0 bps).
+
+> **Long-form companion:** [`report/DATA_AND_ENGINE_SECTION.md`](DATA_AND_ENGINE_SECTION.md)
+> (its CRSP-splice sections describe the now-superseded historical price path).
 
 ---
 
@@ -81,60 +106,48 @@ Sharpe; SHAP attributes most of the signal to momentum and the value factors.
 
 ## 4. Regime Overlay  *(Person C)*
 
-**Model and feature set.** Each month is classified into a market regime using
-an unsupervised model fitted on six macro-financial features: 21-day and
-63-day realised S&P 500 volatility, the VIX level, the 10Y–2Y Treasury term
-spread, the BAA–AAA corporate credit spread, and the trailing 3-month S&P 500
-return. All inputs are lagged by one trading day to eliminate look-ahead, and
-the scaler is refit on the training window only at each walk-forward step.
+**Model.** Each month is classified into a market regime by an unsupervised
+model on six macro-financial features — 21- and 63-day realised volatility, the
+VIX, the 10Y–2Y term spread, the BAA–AAA credit spread, and the trailing
+3-month S&P 500 return — all lagged one trading day and standardised on
+training data only. A **2-state HMM** was selected by walk-forward
+crisis-detection (over GFC, Euro crisis, 2015–16, Q4-2018, COVID, 2022). Labels
+are genuinely OOS (60-month burn-in 2005–2009 before the first prediction);
+over 2010–2024 the split is **~81% calm / 19% crisis** (honest walk-forward
+crisis-detection rate ≈ 51%).
 
-We compared Gaussian Mixture Models (K = 2, 3) and Hidden Markov Models
-(n = 2, 3). The canonical overlay keeps the **2-state HMM** selected by the
-walk-forward crisis-detection criterion rather than imposing extra granularity
-by hand. This matters for two reasons. First, the 2-state model was the best
-empirical performer out-of-sample among the candidates we tested. Second, a
-binary overlay yields the cleanest economic interpretation for the report:
-**full risk in calm periods, materially reduced risk in crises**.
+**Overlay (leverage-only).** The overlay changes only **gross leverage** —
+1.00× in calm, **0.40× in crisis** — holding breadth fixed. An earlier variant
+that also tightened `k` and the quantiles in crises was dropped: an ablation
+showed the breadth lever *hurt* drawdown while the leverage lever helped.
+Delivered as `results/regime_overlay_rules.csv`, consumed via
+`regime.make_regime_fn`.
 
-**Walk-forward evaluation.** Regime labels are genuinely out-of-sample. A
-60-month minimum training window (2005–2009) is used before the first
-prediction in January 2010, and the model plus scaler are refit using prior
-history only. Over the 2010–2024 OOS window, the selected 2-state HMM assigns
-approximately **81% of months to calm** and **19% to crisis**. Its honest
-walk-forward crisis-detection rate across the predefined stress episodes is
-**51.1%**, which is substantially lower than the in-sample fit and is the
-number that should be used when interpreting the overlay's realism. We view
-that gap as expected: the regime model is useful, but not clairvoyant.
+| Regime | Gross leverage | Breadth (k, quantiles) |
+|---|---|---|
+| Calm | 1.00× | unchanged |
+| Crisis | 0.40× | unchanged |
 
-A caveat is that the final 2-state HMM was selected using crisis-detection performance on a predefined set of known stress episodes. This makes the selection criterion economically interpretable, but it is not a fully label-free model-selection rule and therefore uses limited hindsight at the model-choice stage.
+**It works on the strict-S&P canonical, but not on the broad one.** On the
+strict-S&P-500 PIT canonical (Phase 22) the overlay cuts max drawdown
+**−25.5% → −19.9%** with a small Sharpe *gain* (+0.18 → +0.27). On the broad
+Sharadar canonical (Phase 23g) it does **not** help: full-OOS Sharpe +1.07 →
++1.13, but test-OOS **+1.00 → +0.94** and **max drawdown unchanged at −33.8%**
+— the de-levering only costs return (34% → 27%) with no drawdown benefit.
 
-The operational overlay is available for the 2010–2024 out-of-sample window rather than the full 2005–2024 sample, because 2005–2009 is used as the initial burn-in / training window before the first walk-forward regime prediction in January 2010.
+**Why — a monthly-regime timing limit (COVID).** The −34% max drawdown is the
+**Feb–Mar 2020 COVID crash**. The HMM correctly flagged March 2020 as crisis,
+but the overlay sets leverage from the *prior* month-end's label — and both
+Jan-end and Feb-end were 'calm', so the portfolio entered the crash at full
+leverage and the crisis flag arrived **one rebalance too late**. This is a
+fundamental limit of monthly-frequency regime detection on a fast crash, not a
+flaw in the model or the overlay logic — and it is **universe-dependent**: the
+small-cap-tilted broad book has idiosyncratic drawdown dynamics that
+index-volatility regime detection underweights.
 
-**Overlay rule.** The regime overlay does not change *which* stocks are chosen
-by the alpha model, nor how many (breadth is held fixed at k = 5, 10% / 10%
-across regimes); it changes only portfolio aggressiveness via gross leverage:
+![Phase 23g monthly returns coloured by HMM regime label; COVID window shaded](../results/persona_figures/overlay_failure_regime.png)
 
-| Regime | Gross leverage | k per sector | Long/short quantile |
-|---|---|---|---|
-| Calm | 1.00× | 5 | 10% / 10% |
-| Crisis | 0.40× | 5 | 10% / 10% |
-
-Operationally, these parameters are written to
-`results/regime_overlay_rules.csv` and consumed by the engine through
-`src.regime.make_regime_fn`. With a sector map and `k_per_sector` the engine
-holds breadth fixed (top-5 / bottom-5 per sector in every regime); the only
-quantity the overlay changes is the gross leverage multiplier, which it cuts
-from 1.00× in calm states to 0.40× in crisis states. This is the leverage-only
-specification — an earlier draft also tightened `k` and the quantiles in
-crises, but an ablation showed the breadth lever hurt the drawdown profile
-while the leverage lever helped, so breadth is now held constant.
-
-**Interpretation.** The 2-regime specification is the canonical one in the
-report because it is the walk-forward-selected model and because the economic
-story is cleaner than a three-state variant. A 3-regime extension remains a
-reasonable sensitivity check, but it is not needed to state the main result.
-
-![Regime-shaded S&P 500 chart](../results/regime_walkforward_chart.png)
+*[Person C (Andrea) to co-review — regime model-selection detail is her domain. Ablation: `notebooks/persona/regime_overlay_ablation_broad.py`; diagnostic: `overlay_failure_diagnostic.py`.]*
 
 ---
 

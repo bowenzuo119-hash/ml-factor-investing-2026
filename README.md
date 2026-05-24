@@ -82,6 +82,37 @@ It pulls S&P 500 membership (GitHub), FRED macro, yfinance prices + dollar volum
 
 Steps whose prerequisite is missing are **skipped, not fatal**. Person A's methodology figures (sanity gate, universe coverage, walk-forward scheme, splice timeline) regenerate with `python -m notebooks.persona.report_figures`.
 
+## Reproducing the broad-universe canonical
+
+The canonical strategy runs on the **survivorship-free Sharadar broad universe** (top-2000 by market cap, PIT). Prerequisite: a Sharadar premium subscription (`NASDAQ_DATA_LINK_API_KEY` in `.env`). The subscription expires **2026-06-22**, but the raw tables are cached locally under `data/raw/sharadar/` (gitignored) once pulled, so the pipeline runs offline afterwards.
+
+```bash
+# 1. one-time bulk pull of the 8 Sharadar tables + verify
+python -m notebooks.persona.pull_all_sharadar
+python -m notebooks.persona.verify_sharadar_pulls
+
+# 2. freeze the broad panels (returns + features); B3 returns validation
+python -m notebooks.persona.freeze_broad_panel_sharadar
+python -m notebooks.persona.freeze_broad_features_sharadar
+python -m notebooks.persona.validate_sharadar_returns
+python -m notebooks.personb.compute_chmom_maxret_features   # +chmom, +maxret
+python -m notebooks.persona.add_mom6m_mom36m                # +mom36m (mom6m dropped, redundant)
+
+# 3. canonical walk-forward (XGBoost, 13 features, Q-filter, PIT, k=20)
+python -m notebooks.personb.23g_canonical_qfiltered_orig_tune
+
+# 4. audit + cost robustness of the headline
+python -m notebooks.persona.verify_phase23_headline      # FF5 alpha, dollar-neutrality
+python -m notebooks.persona.cost_sensitivity_phase23     # alpha vs bps/side grid
+
+# 5. methodology checks
+python -m notebooks.persona.out_of_time_test             # static 2002-18 -> 2019-24
+python -m notebooks.persona.regime_overlay_ablation_broad  # overlay with/without
+python -m notebooks.persona.overlay_failure_diagnostic     # COVID-timing diagnostic
+```
+
+The **canonical is the 13-feature 23g** run: adding the GKX `chmom`/`maxret`/`mom36m` features (a "24b" 16-feature variant) was tested and **did not improve** the headline (Sharpe 1.07 → 0.97 on the original tune), so they are kept in the panel but excluded from the canonical feature set.
+
 ## Reproducibility rules
 
 * Every model gets `random_state=42`. Every sampling step gets a seed. No exceptions.
