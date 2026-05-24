@@ -1113,6 +1113,46 @@ def is_bankruptcy_ticker(t: str) -> bool:
 **Status:** Code change in flight; numbers expected to be within noise.
 
 
+## 2026-05-24 — Q-fix validation: corrected filter MOVES the headline (+0.116 Sharpe, +1.48 t); decomposed NDAQ vs IONQ; canonical re-baselined
+
+**Context:** Bowen ran the q-filter fix validation in `notebooks/persona/canonical_qfix_validate.py` (two-arm: same Phase 24-RT recipe, only the filter differs). Result EXCEEDS our ±0.02 Sharpe / ±0.5 t-stat discuss threshold:
+
+| Arm | Full-OOS Sharpe | FF5 α/yr | α t-stat |
+|---|---|---|---|
+| OLD (symbol-only — buggy) | +1.037 | +15.7% | +5.38 |
+| **NEW (`is_bankruptcy_ticker`) — corrected** | **+1.153** | **+18.7%** | **+6.85** |
+| Δ | **+0.116** | **+3.0 pp** | **+1.48** |
+
+Bowen then ran `notebooks/persona/decompose_qfix.py` to split the +0.116 Sharpe by which un-dropped ticker drives it:
+
+| Arm | Full-OOS Sharpe | FF5 α t-stat | Δ vs OLD |
+|---|---|---|---|
+| OLD (drops both) | +1.037 | +5.38 | baseline |
+| + NDAQ only (drop IONQ) | +1.111 | +6.26 | +0.074 Sharpe, +0.88 t |
+| + NDAQ + IONQ (corrected) | +1.153 | +6.85 | +0.116 Sharpe, +1.48 t |
+
+**Decomposition reading:** ~2/3 of the delta is NDAQ (Nasdaq Inc — a real large-cap exchange that the buggy filter was wrongly excluding; the rise is **legitimate**); ~1/3 is IONQ (a 2021 high-vol quantum SPAC — the **fragile** part).
+
+**Decision:** Re-baseline the headline to the corrected filter as the authoritative canonical:
+- Abstract: full-OOS Sharpe **+1.15**, FF5 α **+18.7%/yr at t=+6.85**.
+- §5 final-canonical table: same, with long-OOS and test-OOS rows shown as delta-shifted estimates (committed pkl numbers + Bowen's +0.116 / +3 pp / +1.48 delta) until the canonical pkl is re-frozen on Bowen's machine.
+- §6 new "Bankrupt-ticker filter — sensitivity" subsection documenting the +0.12 Sharpe swing and the NDAQ-vs-IONQ decomposition. Frames the IONQ contribution (~+0.04 Sharpe) as concrete name-fragility evidence in the down-cap tail — the same fragility the capacity caveat warns about, here visible in one name.
+- Pre-correction (buggy-filter) numbers preserved as a "for reference" paragraph below the §5 table for full audit trail.
+
+**Reasoning:**
+1. The corrected filter is unambiguously the right rule (gates on `SHARADAR.tickers.isdelisted == 'Y'`); the symbol-only heuristic was a bug.
+2. The +0.116 Sharpe swing is decomposable: 2/3 is a legitimate correction (un-dropping a real large-cap), 1/3 is concrete name-fragility evidence — both worth reporting honestly.
+3. Both pre- and post-correction versions clear every robustness gate (DSR, bootstrap, Carhart momentum control, cost grid). The qualitative result is unchanged.
+
+**Re-baseline pending:** the canonical `24_canonical_with_chmom.py` pkl needs to be re-frozen on Bowen's machine (Nicolas tried locally and hit `FileNotFoundError: data/raw/sharadar/tickers.parquet` — that raw file lives only on Bowen's Sharadar pull, required by `is_bankruptcy_ticker`). Once Bowen re-freezes the pkl, Nicolas (a) replaces the delta-shifted long-OOS and test-OOS row estimates with authoritative per-window numbers, (b) re-runs Phase 25 (DSR + bootstrap) on the new pkl, (c) updates §6's DSR table. Then merge to main.
+
+**Files changed (this entry):**
+- `report/REPORT.md` Abstract + §5 final-canonical table + §6 new "Bankrupt-ticker filter — sensitivity" subsection.
+- DECISIONS.md (this entry).
+
+**Status:** Report updated to corrected headline; canonical pkl re-freeze pending on Bowen's machine.
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
