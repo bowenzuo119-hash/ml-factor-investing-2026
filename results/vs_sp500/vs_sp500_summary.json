@@ -1,0 +1,26 @@
+{
+  "window": "2012-02 -> 2024-12",
+  "n_months": 155,
+  "strategy_10bps": {
+    "sharpe": 1.138,
+    "cagr_pct": 34.73,
+    "vol_pct": 30.11,
+    "cumulative_pct": 4600.4
+  },
+  "sp500_passive": {
+    "sharpe": 0.99,
+    "cagr_pct": 14.32,
+    "vol_pct": 14.69,
+    "cumulative_pct": 463.5
+  },
+  "beta_hedged_alpha": {
+    "sharpe": 0.702,
+    "cagr_pct": 13.18,
+    "vol_pct": 20.45,
+    "cumulative_pct": 395.1,
+    "beta_vs_sp": 1.505,
+    "correlation_vs_sp": -0.001
+  },
+  "annual_win_rate_vs_sp_pct": 84.6,
+  "cost_crossover_with_sp_bps_per_side": 25
+}
