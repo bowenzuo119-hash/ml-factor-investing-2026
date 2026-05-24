@@ -1922,6 +1922,34 @@ DEFAULT_US_EXCHANGES = ("NYSE", "NASDAQ", "NYSEARCA", "BATS", "NYSEMKT")
 
 _UNIVERSE_META_CACHE: pd.DataFrame | None = None
 _DAILY_MCAP_MONTHLY_CACHE: pd.DataFrame | None = None
+_DELISTED_CACHE: frozenset | None = None
+
+
+def _delisted_tickers() -> frozenset:
+    """Cached set of SHARADAR/TICKERS symbols with ``isdelisted == 'Y'``."""
+    global _DELISTED_CACHE
+    if _DELISTED_CACHE is None:
+        df = pd.read_parquet(RAW_DIR / "tickers.parquet",
+                             columns=["table", "ticker", "isdelisted"])
+        df = df[df["table"] == "SEP"]  # one row per ticker on the price universe
+        _DELISTED_CACHE = frozenset(
+            df.loc[df["isdelisted"] == "Y", "ticker"].astype(str).str.upper()
+        )
+    return _DELISTED_CACHE
+
+
+def is_bankruptcy_ticker(t: str) -> bool:
+    """Q-suffix bankruptcy filter, gated on actual delisting status.
+
+    Drops a ticker iff (a) length >= 4, (b) ends in ``Q``, AND (c) it is marked
+    ``isdelisted == 'Y'`` in SHARADAR/TICKERS. The earlier symbol-only rule
+    (``len >= 4 and endswith('Q')``) wrongly dropped **NDAQ** (Nasdaq Inc) and
+    **IONQ** (IonQ Inc) -- both alive common stock, not bankruptcy filings.
+    """
+    t = str(t).upper().strip()
+    if len(t) < 4 or not t.endswith("Q"):
+        return False
+    return t in _delisted_tickers()
 
 
 def _load_universe_meta(force: bool = False) -> pd.DataFrame:
