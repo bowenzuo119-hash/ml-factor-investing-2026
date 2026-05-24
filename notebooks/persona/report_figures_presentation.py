@@ -48,7 +48,7 @@ def _xgb():
 def fig_pipeline_flowchart():
     boxes = [
         ("Sharadar\nSF1·SEP·DAILY·TICKERS\n(survivorship-free)", C_BLUE),
-        ("Broad PIT universe\ntop-2000 by mcap\n+ 14 features", C_BLUE),
+        ("Broad PIT universe\n~4,400/mo (survivorship-free)\n+ 14 features", C_BLUE),
         ("XGBoost\ncross-sectional\nreturn forecast", C_AMBER),
         ("Sector-relative\nrank → top/bottom\nk=20 per GICS", C_AMBER),
         ("Dollar-neutral\nlong–short book\n(10 bps/side)", C_GREEN),

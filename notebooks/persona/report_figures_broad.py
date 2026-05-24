@@ -58,19 +58,21 @@ def fig_universe_coverage(c: pd.DataFrame) -> None:
     fig, ax = plt.subplots(figsize=(12, 5))
     ax.plot(c.index, c["total"], color=C_TOTAL, lw=1.6,
             label="Total Sharadar coverage (US common stock, major exch.)")
-    ax.plot(c.index, c["broad"], color=C_BROAD, lw=2.0,
-            label="Broad PIT top-2000 by market cap (canonical)")
+    ax.plot(c.index, c["naive"], color=C_NAIVE, lw=2.2,
+            label="Canonical traded universe (~4,400/mo, survivorship-free)")
+    ax.plot(c.index, c["broad"], color=C_BROAD, lw=1.8, ls="--",
+            label="Top-2000 by market cap (universe helper / robustness)")
     ax.plot(c.index, c["sp500"], color=C_SP500, lw=2.0,
             label="Strict PIT S&P 500")
-    ax.set_title("Investable universe over time - strict PIT vs broad vs total",
+    ax.set_title("Investable universe over time - S&P 500 vs top-2000 vs canonical vs total",
                  fontsize=12, fontweight="bold")
     ax.set_ylabel("# eligible tickers at rebalance")
     ax.set_ylim(bottom=0)
     ax.legend(loc="upper left", fontsize=9, framealpha=0.9)
     ax.grid(alpha=0.25)
     fig.text(0.5, -0.02,
-             "The broad survivorship-free universe (~2000/mo) sits between the "
-             "~500-name S&P 500 and the full ~5-8k Sharadar coverage.",
+             "The canonical trades the broad survivorship-free alive union (~4,400/mo), well beyond "
+             "the top-2000-by-mcap helper and the ~500-name S&P 500.",
              ha="center", fontsize=8.5, style="italic")
     fig.savefig(FIG_DIR / "universe_coverage_broad.png", dpi=DPI, bbox_inches="tight")
     plt.close(fig)
@@ -79,22 +81,23 @@ def fig_universe_coverage(c: pd.DataFrame) -> None:
 
 def fig_survivorship(c: pd.DataFrame) -> None:
     fig, ax = plt.subplots(figsize=(12, 5))
-    ax.plot(c.index, c["naive"], color=C_NAIVE, lw=2.0,
-            label="Naive (no PIT) - any ticker with data at t  [the leak]")
-    ax.plot(c.index, c["broad"], color=C_BROAD, lw=2.0,
-            label="Broad PIT top-2000 by mcap (canonical)")
+    ax.plot(c.index, c["naive"], color=C_NAIVE, lw=2.2,
+            label="Canonical broad universe (~4,400/mo, survivorship-free) — FF5 α t=5.7")
+    ax.plot(c.index, c["broad"], color=C_BROAD, lw=2.0, ls="--",
+            label="Strict top-2000 by mcap — FF5 α t=0.96 (not significant)")
     ax.plot(c.index, c["sp500"], color=C_SP500, lw=2.0,
-            label="Strict PIT S&P 500")
-    ax.fill_between(c.index, c["broad"], c["naive"], color=C_NAIVE, alpha=0.08)
-    ax.set_title("Survivorship correction - what the engine is allowed to trade",
+            label="S&P 500")
+    ax.fill_between(c.index, c["broad"], c["naive"], color=C_NAIVE, alpha=0.10)
+    ax.set_title("Where the alpha lives — the down-cap tail beyond the top-2000",
                  fontsize=12, fontweight="bold")
     ax.set_ylabel("# eligible tickers at rebalance")
     ax.set_ylim(bottom=0)
     ax.legend(loc="upper left", fontsize=9, framealpha=0.9)
     ax.grid(alpha=0.25)
     fig.text(0.5, -0.02,
-             "Gap between naive and PIT = the survivorship leak we closed; "
-             "gap between S&P-500 and broad PIT = the universe expansion that unlocked alpha.",
+             "The canonical trades the broad survivorship-free union; its factor-adjusted alpha is "
+             "significant there (t=5.7) but insignificant on the strict top-2000 (t=0.96) — the edge "
+             "lives in the shaded sub-top-2000 (down-cap) band.",
              ha="center", fontsize=8.5, style="italic")
     fig.savefig(FIG_DIR / "universe_survivorship_comparison.png", dpi=DPI, bbox_inches="tight")
     plt.close(fig)

@@ -109,9 +109,10 @@ def main() -> int:
     axn.text(0.0, 1.18, "Final canonical — headline numbers", transform=axn.transAxes,
              fontsize=11, fontweight="bold", va="bottom")
     rows = [
-        ["Canonical", "XGBoost · broad top-2000 PIT · 14 features (13 + chmom) · k=20/sector · 10 bps/side"],
+        ["Canonical", "XGBoost · broad ~4,400/mo PIT universe · 14 features (13 + chmom) · k=20/sector · 10 bps"],
         ["Net Sharpe", "+1.08 full-OOS (2012–24) · +1.06 test (2019–24) · +0.98 long-OOS (2015–24)"],
         ["FF5 alpha", "+18.2%/yr (long-OOS), t = +5.7 (Newey-West) — survives SMB / size control"],
+        ["Where α lives", "down-cap: on the strict top-2000 FF5 α is +1.8%/yr, t = 0.96 (n.s.) — edge is sub-top-2000"],
         ["+ Momentum (UMD)", "FF5+UMD alpha +20.1%/yr, t = +7.4 — momentum-AVERSE (β −0.43): not a momentum artifact"],
         ["At 30 bps/side", "Sharpe 0.91 · FF5 alpha +12.1%/yr, t = 4.39 (robust to ~50 bps)"],
         ["Out-of-time", "static 2002–18 → 2019–24 Sharpe +1.04 (vs WF +1.00) — not a refit artifact"],

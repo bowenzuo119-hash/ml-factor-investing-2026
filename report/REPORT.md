@@ -113,20 +113,27 @@ SF1's reported point-in-time price on delisted names (median |Δ| ≈ 0%), and
 in `data_loader.py` as historical alternative price sources but are **not** on
 the canonical path.
 
-**Broad investable universe.** At each month-end the universe is the **top
-2,000 US common stocks by market cap** *trading at that date* — eligible iff
-`firstpricedate ≤ asof ≤ lastpricedate` (a delisted name drops out only after
-its last price, never before — no look-ahead, no survivorship), common stock on
-a major exchange (TICKERS), with positive DAILY market cap. Rolling top-N avoids
-the inflation drift of a fixed dollar threshold; the 2002–2024 union is ~5,900
-distinct tickers. A **bankrupt-ticker filter** drops Sharadar's Q-suffix
-delisted symbols (`len(ticker) ≥ 4 and ticker.endswith("Q")`) — 1,114 names,
-clustering in 2008 and 2023 — so terminal bankruptcy-price dynamics cannot
-manufacture spurious alpha.
+**Investable universe.** The universe helper (`load_universe_at`) takes the top
+2,000 US common stocks by market cap each month — major-exchange, positive
+DAILY market cap, *trading at the date* via `firstpricedate ≤ asof ≤
+lastpricedate` (a delisted name drops out only after its last price, so no
+look-ahead and no survivorship). The 2002–2024 union of those monthly
+top-2,000 sets is ~5,900 tickers. The **canonical backtest trades the
+survivorship-free *alive subset* of that union each month — a median ~4,400
+names, large- through small-cap** — rather than re-restricting to the strict
+top-2,000 at each date. This breadth is load-bearing: on the genuine per-month
+top-2,000 (large/mid-cap) the factor-adjusted alpha is **insignificant (FF5 α
++1.8%/yr, t = 0.96; Mkt-β 0.28, SMB-β 0.15)** — the headline alpha is a
+**down-cap (small/mid-cap) effect** concentrated in names ranked below ~2,000
+(decomposition in `notebooks/persona/canonical_true_top2000.py`), with the cost-
+and capacity-sensitivity that implies (§6). A **bankrupt-ticker filter** drops
+Sharadar's Q-suffix delisted symbols (`isdelisted == 'Y'` and a ≥4-char `…Q`
+ticker) — ~1,100 names clustering in 2008 and 2023 — so terminal bankruptcy
+dynamics cannot manufacture spurious alpha.
 
-![Investable universe over time — strict PIT vs broad vs total](../results/persona_figures/universe_coverage_broad.png)
+![Investable universe over time — S&P 500 vs top-2000 vs canonical (~4,400) vs total](../results/persona_figures/universe_coverage_broad.png)
 
-![Survivorship correction — strict PIT vs broad PIT vs leaky union](../results/persona_figures/universe_survivorship_comparison.png)
+![Where the alpha lives — canonical broad universe vs strict top-2000 (α n.s.) vs S&P 500](../results/persona_figures/universe_survivorship_comparison.png)
 
 ![Bankrupt-ticker exclusion volume per year](../results/persona_figures/q_filter_exclusions.png)
 
