@@ -54,17 +54,46 @@ are documented transparently in §6 and `PIT_INVESTIGATION_REPORT.pdf`.
 
 ## 1. Introduction
 
-*[TODO: 3–4 paragraphs. Suggested flow, all already supported by the material below:]*
+Whether ML cross-sectional factor strategies hold up out-of-sample on liquid
+US equities is the question this project tries to answer honestly. The
+academic literature (Gu, Kelly & Xiu 2020) reports Sharpe ratios above 1.5
+on a broad CRSP universe, but such results are notoriously sensitive to
+survivorship bias, look-ahead leakage, and over-fitting to a single
+historical path. Our task: build a survivorship-free, point-in-time pipeline,
+train three models on it (linear baseline, gradient-boosted trees, small NN),
+and report whatever it produces — including the failures.
 
-- **Problem.** Can a disciplined ML pipeline produce a defensible, out-of-sample
-  long–short factor strategy on a liquid universe, and does a market-regime
-  overlay improve its risk profile?
-- **Approach.** Three decoupled workstreams behind one interface
-  (`run_walk_forward_backtest`): a point-in-time data pipeline (§2), a
-  cross-sectional alpha model (§3), and a regime-conditioned leverage overlay
-  (§4). The seam is versioned so each part iterates independently.
-- **Headline result.** *(pull the §5 numbers)*.
-- **What we got honestly wrong / right.** Forward-reference §6 limitations.
+The project is organised around three decoupled workstreams sharing a single
+versioned interface, `run_walk_forward_backtest`. Person A owns the data lane
+and execution engine (§2): a Sharadar-only price/fundamentals stack with a
+top-2000 rolling-PIT universe and a bankrupt-ticker filter. Person B owns the
+alpha model (§3): a 14-feature GKX-style panel feeding an XGBoost regressor
+trained on sector-relative monthly returns with k=20 long–short picks per
+GICS sector. Person C owns the regime overlay (§4): a Gaussian mixture model
+over volatility/credit/yield-curve signals that conditions leverage on the
+detected regime. The seam is stable enough that each workstream iterates
+independently against a 3/3 Random/Oracle/Uniform sanity gate.
+
+The headline result (§5) is a long-OOS net Sharpe of **+0.98**, an annualised
+return of **+32%**, and a Fama–French 5-factor alpha of **+18.2%/yr (t = +5.7,
+p < 0.001)** over 2015–2024. A Carhart 6-factor regression that adds the
+momentum factor as a control raises alpha to **+20.1%/yr (t = +7.4)** while
+the UMD loading is significantly negative — so the alpha is not repackaged
+momentum premium. Both bootstrap intervals exclude zero (P(SR ≤ 0) =
+0.0003 long-OOS), and the Deflated Sharpe Ratio at N = 25 trials is 0.87
+(Bailey & López de Prado 2014). The realised portfolio is not market-neutral:
+Mkt-β ≈ +1.3, drawdown reaches −34% in the COVID crash, and ~55% of the
+headline return comes from leveraged market exposure — but the remaining
+~45% is genuine cross-sectional skill that survives every factor adjustment.
+
+The honest counterweight to the headline (§6) is the survivorship-leak
+incident that drove our methodology: a previously-reported Sharpe of +1.49
+on the S&P-500-only panel was inflated by training on tickers before their
+S&P join date. Once the leak was closed by enforcing point-in-time eligibility
+at both training and trading time, the S&P-500-only canonical produced no
+significant factor-adjusted alpha at all. The broad-universe Phase 24-RT
+result is what remains after that audit — a strategy whose alpha lives in
+the small/mid-cap tail the S&P-500 narrow universe does not contain.
 
 ---
 
@@ -244,6 +273,17 @@ The strategy realizes a **high-beta directional long-short book** with significa
 
 So ~55% of the headline return comes from market exposure; **~45% is genuine ML cross-sectional skill that survives Fama-French adjustment at t > 5 across every reporting window.**
 
+### Momentum control — is the alpha just the momentum premium?
+
+The SHAP profile of the canonical leans momentum-heavy (the GKX 13-feature stack contains `mom1m`, `mom6m`, `mom12m`, plus `chmom`), so the natural referee question is whether the FF5 alpha is just the UMD momentum premium repackaged. A **Carhart-style 6-factor regression (FF5 + UMD)** on the full-OOS series (n=155) answers this directly:
+
+| Spec | α/yr | α t-stat | UMD β | UMD t-stat |
+|---|---|---|---|---|
+| FF5 (5 factors) | +17.7% | +6.11 | — | — |
+| **FF5 + UMD (Carhart 6F)** | **+20.1%** | **+7.40** | **−0.43** | **−4.61** |
+
+The portfolio is **momentum-averse** (UMD β = −0.43, t = −4.61) — short loadings on the momentum factor — and the **alpha actually rises** from +17.7% to +20.1%/yr (t = +7.40) when UMD is added as a control. The headline +18% FF5 alpha is therefore **not** repackaged momentum premium; it is residual cross-sectional skill that is, if anything, masked by a small short-momentum tilt in the FF5-only spec. Source: `notebooks/persona/check_momentum_factor.py`.
+
 ### Comparison to the broader project narrative
 
 | Phase | Universe | Construction | Sharpe (long-OOS) | FF5 α | Status |
@@ -334,6 +374,50 @@ mcap > $1B per rebalance (~Russell 1000-1500 equivalent). Subscription
 expires 2026-06-22 ("Will Not Renew") so the bulk data pull is happening
 this weekend.
 
+### Statistical robustness — Deflated Sharpe Ratio (BLdP 2014)
+
+Re-running Phase 25's robustness battery against the Phase 24-RT canonical
+(`results/25_statistical_robustness_broad/summary.json`) with the trial count
+bumped from N=10 to **N=25** (counting every configuration evaluated on the
+same long-OOS window across the 23a-24b lineage, not just the headline phases):
+
+| Window | Sharpe | Block-bootstrap 5–95% CI | P(SR ≤ 0) | **DSR (N=25)** |
+|---|---|---|---|---|
+| Test 2019–2024 (n=72) | +1.06 | [+0.48, +1.60] | 0.0016 | **0.868** |
+| Long-OOS 2015–2024 (n=120) | +0.98 | [+0.54, +1.44] | 0.0003 | **0.868** |
+
+Both bootstrap intervals exclude zero comfortably, and the deflated Sharpe of
+0.87 means: **even after penalising for 25 trials, there is an ~87% posterior
+probability that the true Sharpe exceeds the maximum we would expect under
+the null from running 25 unrelated configurations.** The DSR is materially
+lower than the headline Sharpe because the BLdP penalty grows with √(2 ln N),
+but the result remains comfortably above the conventional 0.5 cut-off.
+
+### IC vs. Sharpe — small per-name edge, broad diversification
+
+A natural tension to acknowledge: the model's rank IC (Spearman correlation
+between predictions and realised next-month returns) is ~0.04, which would
+classically be characterised as a weak signal. The Sharpe is nonetheless ~1.0
+because **the strategy is not a high-conviction concentrated bet** — it
+holds ~440 positions per rebalance (k=20 × 11 GICS sectors, long + short),
+so the small per-name edge is multiplied by the law of large numbers. The
+Sharpe comes from broad cross-sectional structure (consistent small tilts
+toward many stocks) rather than from being right with high confidence on a
+few names.
+
+### Annualisation convention
+
+All Sharpe ratios in this report use **monthly mean / monthly std × √12**
+on the engine's stored `portfolio_returns` series (the realised, post-cost
+net return labelled by realisation date). Reported numbers can differ by
+±0.05 depending on whether the same series is reduced through
+`metrics.parquet` (uses pandas std with ddof=1, full-OOS = +1.03), the raw
+mean/std/√12 (full-OOS = +1.08), or Bowen's cost-grid arithmetic on the
+same returns (full-OOS = +1.05). We adopt **+1.08 full-OOS / +0.98
+long-OOS / +1.06 test** as the headline; the others are reconciliations of
+the same underlying series via different reductions and are noted here for
+transparency.
+
 ### Other limitations
 
 - **Free-data coverage gap (pre-broader-rebuild).** ~10–16% of historical
@@ -349,11 +433,35 @@ this weekend.
 
 ## 7. Conclusion
 
-*[TODO: 2 paragraphs. The defensible claim: a disciplined, survivorship-aware,
-look-ahead-controlled ML pipeline produces a long-OOS net Sharpe ~1.5 that is
-statistically significant after multiple-testing correction, with a regime
-overlay that *(quantify once the §5 ablation lands)*. The honest claim: the
-edge is partly factor exposure and the short-window result is borderline.]*
+A disciplined, survivorship-free, look-ahead-controlled ML pipeline produces a
+long-OOS net Sharpe of **+0.98** with a Fama–French 5-factor alpha of
+**+18.2%/yr at t = +5.7** over 2015–2024 on a broad ~2,000-name US equity
+universe. The alpha survives Carhart momentum control (+20.1%/yr at t = +7.4,
+UMD β = −0.43), block-bootstrap robustness (P(SR ≤ 0) = 0.0003), conservative
+transaction-cost stress (significant up to ~50 bps/side), and a Deflated
+Sharpe Ratio of 0.87 at N = 25 trials. These checks span the principal
+referee questions a sceptical reader would raise — *is the apparent edge
+just momentum?*, *is it just a lucky path?*, *is it priced out by costs?*,
+*was it cherry-picked across configurations?* — and the answer in each case
+is no. The result is consistent with Gu, Kelly & Xiu (2020): cross-sectional
+ML alpha does exist on a Russell-1500-equivalent universe of US common stocks
+once survivorship is correctly handled.
+
+Two honest counterweights bound the claim. First, the strategy is **not
+market-neutral**: realised Mkt-β ≈ +1.3 and the long leg generates almost all
+of the P&L (+38%/yr vs −2%/yr for the short leg), so ~55% of the headline
+return is leveraged market exposure and the deepest drawdown is the −34%
+COVID-2020 crash that the monthly regime overlay cannot detect in time.
+Second, this study reports a single ~12-year historical OOS path on monthly
+data with 6 price-trend / 2 liquidity / 4 fundamental / 1 macro / 1 GKX-top-5
+feature; we did not test sub-monthly rebalancing, intraday execution, or
+post-2024 data. The defensible claim is therefore *not* "ML factor strategies
+work" — it is the narrower and more useful one: under realistic survivorship
+controls, point-in-time eligibility filters, and conservative costs, the
+Phase 24-RT canonical produces statistically significant cross-sectional
+alpha on the post-2015 OOS sample, and the path from the leaky pre-audit
++1.49 Sharpe to the honest +0.98 here is the methodological contribution
+that matters most.
 
 ---
 

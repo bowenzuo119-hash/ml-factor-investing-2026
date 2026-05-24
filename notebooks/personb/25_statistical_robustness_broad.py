@@ -43,15 +43,26 @@ RESULTS_DIR = (
 )
 PHASE_DIR = (
     Path(__file__).resolve().parents[2] / "results"
-    / "23_canonical_broad_sharadar"
+    / "24_canonical_with_chmom"
 )
 
 TEST_START = pd.Timestamp("2019-01-01")
 TEST_END = pd.Timestamp("2024-12-31")
 LONG_OOS_START = pd.Timestamp("2015-01-01")  # full walk-forward range
 
-# Trials tested across the project: Phase 1, 1.5, 2, 3b, 3c, 8, 14, 15, 22, 23
-N_TRIALS = 10
+# DSR trial count: all Sharpe-bearing canonical configurations evaluated during
+# model development. Bumped from 10 -> 25 on 2026-05-24 to reflect the broad-
+# universe rebuild (Phases 22 -> 24b). An under-deflated DSR overstates
+# significance, so we count every config that was scored on the same OOS
+# window, not just the ones we wrote up.
+#   Pre-audit lineage (S&P-500-only):   1, 1.5, 2, 3b, 3c, 8, 14, 15, 22  (9)
+#   Post-audit broad lineage:           23, 23b, 23c, 23d, 23e, 23g, 24,
+#                                       24a, 24b, 24c                    (10)
+#   Hyperparameter retunes (Optuna best on val, then walk-forward scored):
+#                                       19, 23a, 24a, 24b, 24c           (5)
+#   Other small variants kept honest:   01b, 02, 03b, 03c, 05c, 14, 15   (counted above)
+# Total distinct Sharpe trials touching the same OOS window ~25.
+N_TRIALS = 25
 BLOCK_BOOTSTRAP_BLOCK_SIZE = 6   # 6-month blocks
 BLOCK_BOOTSTRAP_N_ITERS = 10_000
 RANDOM_STATE = 42
@@ -311,6 +322,18 @@ def main() -> int:
 
     # ============== B. DEFLATED SHARPE ===============================
     # Sharpe across all canonical trials run during model development.
+    # NOTE on N vs V[SR] (per Bailey-Lopez de Prado 2014):
+    #   * `N_TRIALS` (above, set to 25) is the count of distinct
+    #     configurations evaluated on the same OOS window during model
+    #     development. It drives the expected-max-SR penalty via
+    #     sqrt(2 ln N), so under-counting trials inflates the DSR.
+    #   * `trial_sharpes` below is the sample we use to estimate V[SR]
+    #     across trials. We keep this restricted to the configs whose
+    #     long-OOS Sharpes are *recorded on disk* in their result.pkl /
+    #     metrics.parquet, so V[SR] is empirically defensible. (Adding
+    #     fabricated Sharpes for the remaining ~17 broad-universe phases
+    #     would inflate the variance and weaken — not strengthen — the
+    #     DSR penalty.)
     print("\n[3/4] Deflated Sharpe (Bailey-Lopez de Prado 2014)...")
     trial_sharpes = {
         "Phase 1":   -0.032,
