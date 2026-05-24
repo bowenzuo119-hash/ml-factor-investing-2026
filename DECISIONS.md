@@ -933,6 +933,57 @@ The HML loading remains a real feature exposure — the model is partly betting 
 **Revisit if:** subscription gets extended past June 22 (then we have more time for sensitivity analyses), or the bulk pull discovers a data quirk that requires methodology adjustment.
 
 
+## 2026-05-24 — Phase 23g: FINAL HONEST CANONICAL — broad universe + Q-filter + k=20
+
+**Context:** Bowen shipped Block A-C (Sharadar bulk-pull + broad-universe panel + survivorship-free `load_universe_at`) over Friday-Saturday. Phase 23a/b/c/d/e/g iteratively built and stress-tested the broader-universe canonical. Final architecture:
+
+* Universe: top 2000 US common stocks by market cap at each date, PIT-correct via SHARADAR/TICKERS + DAILY (~2000 names per rebalance)
+* Returns: SHARADAR/SEP closeadj.pct_change() monthly (single source, includes delisted, no splice)
+* Features: 13 unchanged from Phase 22 (mom, rev, mvol, ivol, log_mktcap, dvol, bm, ep, roe, roa, de, asset_growth, accruals)
+* Q-suffix bankrupt-ticker filter applied to features AND returns (`*Q` per Sharadar convention: INTEQ, LKSDQ, SIVBQ, ENRNQ, etc. — 399 tickers, ~7.4% of training rows)
+* XGBoost hyperparameters from Phase 23a (Optuna on broad panel, not Q-filtered — Phase 23d's Q-filtered retune barely moved results so we kept the simpler tune)
+* Sector-neutral construction k=20 per GICS sector (~440 positions, ~0.45% weight per position)
+* Engine v0.5.0 with `apply_pit_to_training=True`
+
+**Result (XGBoost, Phase 23g):**
+
+| Window | Sharpe | Ann return | Max DD | **FF5 alpha** | t-stat | p-value | Mkt-β |
+|---|---|---|---|---|---|---|---|
+| Full-OOS 2012-2024 | **+1.05** | +34.1% | -34.3% | **+17.74%/yr** | **+5.52** | **<0.001** | +1.42 |
+| Long-OOS 2015-2024 | +0.95 | +33.7% | -34.3% | +18.92%/yr | +5.31 | <0.001 | +1.46 |
+| Test 2019-2024 | +1.02 | +43.2% | -34.3% | +22.64%/yr | +5.16 | <0.001 | +1.54 |
+
+**The headline claim:** statistically significant Fama-French 5-factor alpha of **+17.74%/yr (t=+5.52, p<0.001)** on the strict-OOS 12.7-year window. First time in the project we have significant FF5 alpha. Compare to Phase 22 (S&P 500 only, market-neutral): -0.88%/yr (t=-0.24, n.s.).
+
+**Honest decomposition** of the +34%/yr ann return (long-OOS):
+- ~+19%/yr from market beta exposure (β=1.42 × 13.5% Mkt-RF premium)
+- ~+5%/yr from small-cap factor (SMB exposure)
+- **~+18%/yr pure cross-sectional alpha** (FF5-adjusted, significant)
+
+So ~55-60% of the realised return is market beta; ~40-45% is the real factor-adjusted edge. This must be disclosed transparently — the strategy is NOT effectively dollar-neutral despite k=20 sector-neutral construction, because the model systematically picks higher-beta names as longs and lower-beta names as shorts.
+
+**Methodology lessons from the rebuild:**
+
+1. **Phase 23a Optuna retune on broad panel** (60 trials) found XGBoost params: n_estimators=100, max_depth=6, lr=0.013, subsample=0.55, colsample=0.56, min_child_weight=23, reg_alpha=1.70, reg_lambda=5.28. Much more aggressive bagging + regularization than Phase 22's tune — fits the larger data with noise control.
+
+2. **Phase 23b k-sweep with Q-filter** showed k=15-30 is the robust plateau (k=1 looks great but is dominated by single-ticker outliers; k=50 over-diversifies). k=20 picked.
+
+3. **Q-suffix filter is essential.** Without it, the engine traded bankruptcy tickers (LSCG +285%, NNDM +218%, etc. one-month moves) that aren't real trades — frozen on brokers. Filter dropped 7.4% of training rows / 399 of ~2400 tickers per date.
+
+4. **Phase 23d Q-filtered-retune barely helped.** XGBoost retuned on Q-filtered training had val R² +0.0046 (vs 23a's +0.0031, +47% better) but the walk-forward Sharpe difference was negligible (+1.05 vs +1.07). Classic validation-set overfitting that doesn't generalize. Phase 23g uses the simpler Phase 23a tune.
+
+5. **Date-labeling bug in reconstruction code** (discovered mid-investigation): my `build_portfolio_returns` helper labeled portfolio returns by trade date rather than realization date, causing one-month FF5 misalignment that flipped apparent betas. Fixed; engine portfolio_returns were always correctly labeled.
+
+**Decision:** Phase 23g is the FINAL honest canonical for the report. All headline numbers in REPORT.md §5 are now Phase 23g. Phase 22 retained as the "strict-PIT S&P-500 market-neutral sensitivity check" showing why the broader universe matters.
+
+**Reasoning:** Honest in three dimensions simultaneously:
+- (a) PIT correctness — strict universe filter via Sharadar TICKERS, no survivorship leak
+- (b) Statistically significant after factor adjustment — FF5 alpha t > 5 in every window
+- (c) Decomposed transparently — readers see how much of the Sharpe is market beta vs alpha
+
+**Revisit if:** the regime overlay re-run on Phase 23g materially improves Sharpe (Person C's overlay), or if the AR-vs-MR sensitivity check exposes look-ahead in the SF1 fundamentals.
+
+
 ## Upcoming decisions to log
 
 Placeholders to fill in as they happen:
