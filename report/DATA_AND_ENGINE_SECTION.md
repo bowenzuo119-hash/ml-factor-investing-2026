@@ -5,6 +5,14 @@
 below has a dated entry in `DECISIONS.md`; figures live in
 `results/persona_figures/`.*
 
+> **⚠️ PARTIALLY SUPERSEDED (2026-05-24).** The canonical price path is now a
+> single Sharadar source (SEP `closeadj`, survivorship-free) on the broad
+> top-2000 universe — see **§2 of `REPORT.md`** for the current pipeline.
+> §3 below (the CRSP → yfinance splice) is **historical**: it remains in the
+> codebase (`load_prices_spliced`) as an alternative price source but is not on
+> the canonical path. §§4–10 (fundamentals, dollar volume, macro, engine,
+> sector control, sanity gate, reproducibility) are still current.
+
 ---
 
 ## 1. Data sources
@@ -45,7 +53,14 @@ index stops being tradable on the correct date (DECISIONS 2026-05-13
 
 ---
 
-## 3. Prices: the CRSP → yfinance splice
+## 3. Prices: the CRSP → yfinance splice  *(HISTORICAL — superseded)*
+
+> *This section describes the original price path. The canonical strategy now
+> sources prices from **Sharadar SEP `closeadj`** (single source, 2002–2024,
+> delisted names included), removing the need for a splice; see REPORT §2. The
+> splice below is retained in `data_loader.load_prices_spliced` as an
+> alternative source and for the yfinance-tail validation that motivated the
+> move to Sharadar.*
 
 **CRSP MSF (≤ 2022-12-30)** is the backbone: vendor-grade monthly total returns
 keyed by **PERMNO** (a permanent identifier, stable across ticker changes).
