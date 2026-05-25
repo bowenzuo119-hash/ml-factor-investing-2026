@@ -452,37 +452,63 @@ def fig_return_decomposition(out):
              ha="center", fontsize=10, weight="bold", color=COL_OUTPUT,
              bbox=dict(boxstyle="round,pad=0.4", facecolor="#FEE2E2", edgecolor=COL_OUTPUT))
 
-    # ============== Right: pie chart of annual return decomposition ==============
-    ax2.set_title("Decomposition of the +34.7%/yr annual return\n"
-                  "(net of 10 bps/side costs)",
-                  fontsize=12.5, weight="bold")
+    # ============== Right: waterfall of annual return decomposition ==============
+    ax2.set_title("Waterfall: how the annual return is built\n"
+                  "Gross → minus costs → = Net (decomposed by FF5 source)",
+                  fontsize=12, weight="bold")
 
-    # FF5 decomposition (approximate)
-    parts = [
-        ("FF5 pure α\n(the genuine skill)", 18.7, COL_MODEL),
-        ("Mkt-β × Mkt-RF\n(leveraged market)", 14.0, "#5B92D8"),
-        ("SMB exposure\n(size premium)", 3.0, "#7CB3E8"),
-        ("Residual / costs", -1.0, COL_LIGHT),
+    # Waterfall steps from gross to net, then FF5 decomposition of net
+    # GROSS = +37.6%/yr
+    # NET = +34.7%/yr (after -2.9 cost drag)
+    # NET = FF5 alpha +18.7 + Mkt-beta contribution +13.5 + SMB +2.5 + small
+    steps = [
+        ("Gross return", 37.6, COL_DATA, "total"),
+        ("Cost drag\n(10 bps × 179% turnover)", -2.9, "#EF4444", "delta"),
+        ("Net return", 34.7, COL_MODEL, "total"),
+        ("FF5 pure α", 18.7, COL_MODEL, "decomp"),
+        ("Mkt-β × Mkt-RF\n(β=+1.5, leveraged market)", 13.5, "#5B92D8", "decomp"),
+        ("SMB exposure\n(small-cap premium)", 2.5, "#7CB3E8", "decomp"),
     ]
-    # Show only positive contributions for the pie
-    sizes = [abs(p[1]) for p in parts]
-    labels = [p[0] for p in parts]
-    colors = [p[2] for p in parts]
 
-    wedges, texts, autotexts = ax2.pie(
-        sizes, labels=labels, colors=colors,
-        autopct=lambda pct: f"{pct/100*sum(sizes):+.1f}\n%/yr",
-        startangle=90, counterclock=False, textprops={"fontsize": 9.5},
-        wedgeprops={"edgecolor": "white", "linewidth": 2},
-        pctdistance=0.7,
-    )
-    for at in autotexts:
-        at.set_color("white")
-        at.set_fontweight("bold")
-        at.set_fontsize(9)
-    # Center text
-    ax2.text(0, -1.55, "~54% of return is genuine α; ~46% is leveraged factor exposure",
-             ha="center", fontsize=10, weight="bold", color=COL_TEXT)
+    ys = np.arange(len(steps))
+    for i, (label, val, color, kind) in enumerate(steps):
+        bar_color = color
+        if kind == "delta" and val < 0:
+            bar_color = "#EF4444"  # red for negative
+        ax2.barh(len(steps) - 1 - i, val, color=bar_color, edgecolor="white", lw=1.5)
+        # Label inside or outside bar
+        ax2.text(val + (0.5 if val >= 0 else -0.5), len(steps) - 1 - i,
+                 f"{val:+.1f}%/yr", ha="left" if val >= 0 else "right",
+                 va="center", fontsize=10.5, weight="bold",
+                 color=COL_TEXT)
+        # Bar label
+        ax2.text(-12, len(steps) - 1 - i, label, ha="right", va="center",
+                 fontsize=9.5, color=COL_TEXT)
+        # Separator between gross-net section and FF5 decomposition
+        if i == 2:
+            ax2.axhline(len(steps) - 1 - i - 0.5, color="#94A3B8",
+                         ls="--", lw=1, alpha=0.7)
+            ax2.text(20, len(steps) - 1 - i - 0.5,
+                      "  ↓ Net return decomposed by source", ha="left",
+                      va="center", fontsize=8.5, style="italic", color="#475569")
+
+    ax2.axvline(0, color="black", lw=0.8)
+    ax2.set_xlim(-15, 45)
+    ax2.set_ylim(-0.7, len(steps) - 0.3)
+    ax2.set_xlabel("Annualised return contribution (%/yr)", fontsize=10.5)
+    ax2.set_yticks([])
+    ax2.set_xticks([-5, 0, 10, 20, 30, 40])
+    ax2.grid(axis="x", alpha=0.3)
+    ax2.spines["top"].set_visible(False)
+    ax2.spines["right"].set_visible(False)
+    ax2.spines["left"].set_visible(False)
+
+    # Bottom text
+    ax2.text(15, -0.5,
+             "FF5 pure α = ~54% of net return; leveraged-factor exposure = ~46%",
+             ha="center", fontsize=10, weight="bold", color=COL_TEXT,
+             bbox=dict(boxstyle="round,pad=0.3", facecolor="#F0F9FF",
+                       edgecolor=COL_DATA, lw=1))
 
     fig.tight_layout()
     fig.savefig(out, dpi=130, bbox_inches="tight", facecolor="white")
