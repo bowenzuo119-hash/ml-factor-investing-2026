@@ -693,10 +693,32 @@ Newey-West HAC). The question it cannot answer is whether the alpha is
 have the data to measure here. The conservative claim the report makes
 is therefore the academic one (cross-sectional ML alpha exists on a
 broad survivorship-free US equity universe) rather than the operational
-one ("we'd run this in size tomorrow"). A direct extension would
-re-run the cost grid with size-impact-aware Almgren-Chriss or Kissell
-models calibrated to the actual cap-bucket distribution of the long/short
-positions.
+one ("we'd run this in size tomorrow"). Two direct extensions would
+materially tighten the cost story:
+
+- **Size-impact-aware cost modelling** — re-run the cost grid with
+  Almgren-Chriss or Kissell models calibrated to the actual cap-bucket
+  distribution of the long/short positions instead of a flat 10/30/50
+  bps grid. This would replace the current "bps-per-side" abstraction
+  with a per-trade impact function that depends on order size relative
+  to ADV.
+- **Hysteresis selection / turnover dampening** — the canonical's
+  selection step re-ranks all ~4,400 stocks each month and picks
+  top-k/bottom-k per sector *independently of last month's picks*. A
+  marginal name (rank-19 last month, rank-22 this month) gets kicked
+  out and replaced even though the change is statistically
+  indistinguishable from noise. A buffer-band selection rule ("once a
+  stock is in the long book at rank ≤ 20, keep it until it falls to
+  rank > 30") would reduce monthly turnover by approximately 40% at the
+  cost of ~10% of the alpha (the names being added/removed at the
+  threshold are by definition the lowest-conviction picks). At the
+  current 10 bps/side cost basis this would save ~0.9 pp/yr; at 30
+  bps/side it would save ~2.6 pp/yr — material at the upper end of the
+  cost grid but only modest at the headline level. We did not
+  implement it in the canonical because it introduces an extra
+  hyperparameter (the buffer width) that would need its own
+  walk-forward tuning, and the project's apples-to-apples objective
+  was the no-hysteresis GKX-replication recipe.
 
 ### Broader-universe rebuild (Phase 23 — completed; superseded by Phase 24-RT)
 
@@ -815,6 +837,30 @@ significant cross-sectional alpha on the post-2015 OOS sample, and the path
 from the leaky pre-audit +1.49 Sharpe down to −0.31 (PIT-applied collapse on
 S&P-500-only) and back up to the honest +1.15 here is the methodological
 contribution that matters most.
+
+**What we would do differently** in a follow-up project, in priority order:
+
+1. **Hysteresis selection / turnover dampening** — replace the current
+   independent-each-month top-k/bottom-k selection with a buffer-band rule
+   that keeps existing positions until they fall further from the threshold.
+   Expected to cut monthly turnover by ~40% with <10% alpha loss, saving
+   ~0.9 pp/yr at 10 bps/side and ~2.6 pp/yr at 30 bps/side. Not implemented
+   in the canonical because it introduces an extra hyperparameter (buffer
+   width) that needs its own walk-forward tuning. See §6 "Costs and
+   capacity" for the full discussion.
+2. **Size-impact-aware cost modelling** — Almgren-Chriss or Kissell
+   on the actual cap-bucket distribution of positions, replacing the
+   flat-bps cost grid with a per-trade impact function dependent on order
+   size vs ADV.
+3. **Sub-monthly regime detection** — weekly or daily HMM on rolling
+   z-scores of the macro features to catch fast crashes (e.g., COVID
+   Feb-Mar 2020) that the monthly-frequency overlay missed.
+4. **Cliff-style leave-one-out robustness** — full-universe LO (n ≫ 11)
+   with bootstrap CIs to defensibly characterise single-name fragility
+   beyond the suggestive but underpowered Phase 26 study.
+5. **Walk-forward Optuna retune cadence** — refit hyperparameters at
+   each test-block boundary instead of one-shot tuning on 2017–18,
+   capturing regime-change in the hyperparameter optimum.
 
 ---
 

@@ -189,9 +189,10 @@ Shuffling the feature → ticker mapping within each rebalance date kills the ed
 - **Defensible claim:** under realistic survivorship controls + PIT eligibility + 10 bps/side costs, the Phase 24-RT canonical produces statistically significant cross-sectional alpha on the 2012–2024 OOS sample, robust to **every** rigor check (Carhart, DSR, bootstrap, placebo, cost stress, k-sweep, sanity gates).
 - **Honest bounds:** not market-neutral; capacity-constrained at deployable AUM; single-name fragility; regime overlay net-zero on broad book.
 - **What we'd do differently** (in priority):
-  1. Size-impact-aware cost modelling (Almgren-Chriss) on the actual cap-bucket distribution
-  2. Sub-monthly regime detection (weekly/daily HMM) to catch fast crashes
-  3. Cliff-style leave-one-out on full universe (n>>11) with bootstrap CIs
+  1. **Hysteresis selection / turnover dampening** -- the model re-picks top-k/bottom-k each month *independently*, kicking out marginal names (rank-19 last month, rank-22 this month). A buffer band ("keep last month's longs as long as they're still in top-30") could cut turnover ~40% with <10% alpha loss, saving ~0.9 pp/yr at 10 bps and ~2.6 pp/yr at 30 bps.
+  2. Size-impact-aware cost modelling (Almgren-Chriss) on the actual cap-bucket distribution
+  3. Sub-monthly regime detection (weekly/daily HMM) to catch fast crashes
+  4. Cliff-style leave-one-out on full universe (n>>11) with bootstrap CIs
 - **What we learned:** the audit journey (+1.49 → −0.31 → +1.15) is the methodological contribution; the alpha number is the empirical contribution. Build the audit into the pipeline, run it relentlessly, publish the journey honestly.
 
 ## Questions?
